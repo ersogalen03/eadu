@@ -7,4 +7,4 @@ class ResPartner(models.Model):
     _inherit = "res.partner"
 
     eadu_url = fields.Char("Other Instance URL")
-    eadu_id = fields.Integer("Other Instance ID")
+    eadu_ident = fields.Integer("Other Instance ID")

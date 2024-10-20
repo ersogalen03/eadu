@@ -13,7 +13,8 @@ On the partner fill in his URL and your id in his db.
         'purchase'
     ],
     'data': [
-        
+        'views/purchase_order_views.xml',
+        'views/res_partner_views.xml',
     ],
     'demo': [
     ],
