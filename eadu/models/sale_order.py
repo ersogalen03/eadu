@@ -6,12 +6,12 @@ from odoo import api, fields, models
 class SaleOrder(models.Model):
     _inherit = "sale.order"
 
-    eadu_ident = fields.Integer('Eadu Identification')
+    eadu_ident = fields.Integer('Eadu Identification', copy=False)
 
     def _eadu_call(self, partner):
         # 1: Compose user
         user = self.env.user
-        user_p = self.env['eadu.user.partner'].search([('user_id', '=', user.id), ('partner_id', '=', partner.id)], limit=1)
+        user_p = self.env['eadu.partner.user'].search([('user_id', '=', user.id), ('partner_id', '=', partner.id)], limit=1)
         if not user_p:
             vals = {'user': user.id, 'partner': partner.id}
             to_send = {
@@ -34,12 +34,12 @@ class SaleOrder(models.Model):
         if partner:
             vals['eadu_ident'] = partner.id
 
-    def create(self, vals):
-        res = super().create(vals)
-        # We could check this in the write as well...
-        if vals.get('partner_id'):
-            if partner := self.env['res.partner'].browse(vals['partner_id']) and partner.eadu_ident:
-                sale = self.browse(res)
-                sale._eadu_call(partner)
-        return res
+    # def create(self, vals):
+    #     res = super().create(vals)
+    #     # We could check this in the write as well...
+    #     if vals.get('partner_id'):
+    #         if partner := self.env['res.partner'].browse(vals['partner_id']) and partner.eadu_ident:
+    #             sale = self.browse(res)
+    #             sale._eadu_call(partner)
+    #     return res
 

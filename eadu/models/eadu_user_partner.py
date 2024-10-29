@@ -3,7 +3,7 @@
 from odoo import api, fields, models
 
 
-class ResPartner(models.Model):
+class EaduPartnerUser(models.Model):
     _name = "eadu.partner.user"
     _description = "Link between Eadu Partners and users"
 
