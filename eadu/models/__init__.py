@@ -4,3 +4,4 @@ from . import sale_order
 from . import purchase
 from . import res_users
 from . import mail_message
+from . import discuss_channel

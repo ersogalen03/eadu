@@ -9,6 +9,10 @@ class PurchaseOrder(models.Model):
 
     eadu_ident = fields.Integer('Eadu Identification', copy=False)
 
+
+
+    # Utility methods
+
     @api.model
     def _eadu_call(self, partner, url_ext, params):
         params.update({
@@ -27,20 +31,33 @@ class PurchaseOrder(models.Model):
             })
         return lines
 
+    @api.model
+    def _search_create_partner_user(self, partner, user):
+        partner_user = self.env['eadu.partner.user'].sudo().search([('partner_id', '=', partner.id), ('user_id', '=', user.id)], limit=1)
+        if not partner_user:
+            result = self._eadu_call(partner, 'eadu/1/usercreate', {'name': user.name, 'eadu_ident': user.id})
+            partner_user = self.env['eadu.partner.user'].sudo().create({
+                'partner_id': partner.id,
+                'user_id': user.id,
+                'eadu_ident': result['user_id'],
+            })
+        return partner_user
+
+
+    # Button methods
+
     def button_eadu_sync(self):
         self.ensure_one()
         if not self.partner_id.eadu_ident:
             raise
         # Search user_partner link
-        partner_user = self.env['eadu.partner.user'].sudo().search([('partner_id', '=', self.partner_id.id), ('user_id', '=', self.env.user.id)], limit=1)
-        if not partner_user:
-            result = self._eadu_call(self.partner_id, 'eadu/1/usercreate', {'name': self.env.user.name, 'eadu_ident': self.env.user.id})
-            partner_user = self.env['eadu.partner.user'].sudo().create({
-                'partner_id': self.partner_id.id,
-                'user_id': self.env.user.id,
-                'eadu_ident': result['user_id'],
-            })
+        partner_user = self._search_create_partner_user(self.partner_id, self.user_id)
 
-        params = {'lines': self._convert_order_line(), 'ref': self.name, 'eadu_ident': self.id, 'user_id': partner_user.eadu_ident}
+        params = {
+            'lines': self._convert_order_line(), 
+            'ref': self.name, 
+            'eadu_ident': self.id, 
+            'user_id': partner_user.eadu_ident
+            }
         result = self._eadu_call(self.partner_id, 'eadu/1/saleordercreate', params)
         self.eadu_ident = result['sale_order_id']

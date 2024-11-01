@@ -17,20 +17,36 @@ class TermsController(http.Controller):
         if not partner.eadu_ident:
             raise
         user = request.env['res.users'].sudo().browse(user_id)
-        import pdb; pdb.set_trace()
 
         vals = {
             'body': body,
             'author_id': user.partner_id.id,
+            'res_id': res_id,
+            'model': model,
         }
-        vals.update({
-            'res_id': partner.id,
-            'model': 'res.partner',
-        })
-        message = request.env['mail.message'].sudo().create(vals)
+        message = request.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
 
         return {'message_id': message.id}
 
+    @http.route('/eadu/1/channelcreate', type='json', auth='public')
+    def channel_create(self, partner_ident, name, eadu_ident, from_user_id, to_user_id):
+        partner = request.env['res.partner'].sudo().browse(partner_ident)
+        if not partner.eadu_ident:
+            raise
+
+        from_user = request.env['res.users'].sudo().browse(from_user_id)
+        to_user = request.env['res.users'].sudo().browse(to_user_id)
+
+        members = from_user.partner_id | to_user.partner_id
+        vals = {
+            'name': name,
+            'channel_partner_ids': [Command.link(m.id) for m in members],
+            'group_public_id': None,
+            'channel_type': 'chat',
+            'eadu_ident': eadu_ident,
+        }
+        channel = request.env['discuss.channel'].sudo().create(vals)
+        return {'channel_id': channel.id}
 
     @http.route('/eadu/1/usercreate', type='json', auth='public')
     def user_create(self, partner_ident, eadu_ident, name):
@@ -45,6 +61,7 @@ class TermsController(http.Controller):
         }
         
         user = request.env['res.users'].sudo().create(vals)
+        user.partner_id.parent_id = partner
         return {'user_id': user.id}
 
     @http.route('/eadu/1/saleordercreate', type='json', auth='public')
@@ -66,12 +83,12 @@ class TermsController(http.Controller):
             partner = request.env['res.partner'].sudo().search([('id', '=', partner_ident)], limit=1)
             if not partner:
                 raise
-            sales = SaleOrder.create({
+            sales = SaleOrder.with_context(eadu_message=True).create({
                 'partner_id': partner.id,
                 'origin': ref,
                 'eadu_ident': eadu_ident,
                 'order_line': [Command.create(line) for line in lines],
             })
         user = request.env['res.users'].sudo().browse(user_id)
-        sales._message_log(author_id=user.partner_id.id, body=_('Sale Order created/modified from Eadu'))
+        sales.with_context(eadu_message=True)._message_log(author_id=user.partner_id.id, body=_('Sale Order created/modified from Eadu'))
         return {'sale_order_id': sales.id}
