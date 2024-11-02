@@ -51,7 +51,7 @@ class PurchaseOrder(models.Model):
         if not self.partner_id.eadu_ident:
             raise
         # Search user_partner link
-        partner_user = self._search_create_partner_user(self.partner_id, self.user_id)
+        partner_user = self._search_create_partner_user(self.partner_id, self.env.user)
 
         params = {
             'lines': self._convert_order_line(), 

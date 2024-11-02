@@ -8,38 +8,33 @@ class SaleOrder(models.Model):
 
     eadu_ident = fields.Integer('Eadu Identification', copy=False)
 
-    def _eadu_call(self, partner):
-        # 1: Compose user
-        user = self.env.user
-        user_p = self.env['eadu.partner.user'].search([('user_id', '=', user.id), ('partner_id', '=', partner.id)], limit=1)
-        if not user_p:
-            vals = {'user': user.id, 'partner': partner.id}
-            to_send = {
-                'name': user.name,
-                'login': user.login + self.company_id.name,
+
+    def _convert_order_line(self): 
+        """ Lines converted to purchase order lines """
+        lines = []
+        for line in self.order_line:
+            lines.append({
+                'name': line.product_id.name,
+                'product_qty': line.product_uom_qty,
+                'price_unit': line.price_unit,
+            })
+        return lines
+
+    # Button methods
+
+    def button_eadu_sync(self):
+        self.ensure_one()
+        if not self.partner_id.eadu_ident:
+            raise
+        # Search user_partner link
+        partner_user = self.env['purchase.order']._search_create_partner_user(self.partner_id, self.env.user)
+
+        params = {
+            'lines': self._convert_order_line(), 
+            'ref': self.name, 
+            'eadu_ident': self.id, 
+            'user_id': partner_user.eadu_ident
             }
-
-        # 2: Compose sale order
-        
-        lines = [{
-            'name': l.product_id.name,
-            'product_uom_qty': l.product_uom_qty,
-            'product_uom': l.product_uom.name,
-            'price_unit': l.price_unit,
-        } for l in self.order_line]
-
-        vals = {
-            'lines': lines,
-        }
-        if partner:
-            vals['eadu_ident'] = partner.id
-
-    # def create(self, vals):
-    #     res = super().create(vals)
-    #     # We could check this in the write as well...
-    #     if vals.get('partner_id'):
-    #         if partner := self.env['res.partner'].browse(vals['partner_id']) and partner.eadu_ident:
-    #             sale = self.browse(res)
-    #             sale._eadu_call(partner)
-    #     return res
+        result = self.env['purchase.order']._eadu_call(self.partner_id, 'eadu/1/purchaseordercreate', params)
+        self.eadu_ident = result['purchase_id']
 

@@ -14,6 +14,7 @@ On the partner fill in his URL and your id in his db.
     ],
     'data': [
         'views/purchase_order_views.xml',
+        'views/sale_order_views.xml',
         'views/res_partner_views.xml',
         'data/product_data.xml',
     ],
