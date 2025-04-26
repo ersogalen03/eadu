@@ -2,7 +2,6 @@
 
 from odoo import api, fields, models
 
-from odoo.addons.iap.tools.iap_tools import iap_jsonrpc as jsonrpc
 
 class PurchaseOrder(models.Model):
     _inherit = "purchase.order"
@@ -13,13 +12,7 @@ class PurchaseOrder(models.Model):
 
     # Utility methods
 
-    @api.model
-    def _eadu_call(self, partner, url_ext, params):
-        params.update({
-            'partner_ident': partner.eadu_ident,
-        })
-        result = jsonrpc(partner.eadu_url + url_ext, params=params)
-        return result
+
 
     def _convert_order_line(self):
         lines = []
@@ -35,7 +28,7 @@ class PurchaseOrder(models.Model):
     def _search_create_partner_user(self, partner, user):
         partner_user = self.env['eadu.partner.user'].sudo().search([('partner_id', '=', partner.id), ('user_id', '=', user.id)], limit=1)
         if not partner_user:
-            result = self._eadu_call(partner, 'eadu/1/usercreate', {'name': user.name, 'eadu_ident': user.id})
+            result = partner._eadu_call('eadu/1/usercreate', {'name': user.name, 'eadu_ident': user.id})
             partner_user = self.env['eadu.partner.user'].sudo().create({
                 'partner_id': partner.id,
                 'user_id': user.id,
@@ -59,5 +52,5 @@ class PurchaseOrder(models.Model):
             'eadu_ident': self.id, 
             'user_id': partner_user.eadu_ident
             }
-        result = self._eadu_call(self.partner_id, 'eadu/1/saleordercreate', params)
+        result = self.partner_id._eadu_call('eadu/1/saleordercreate', params)
         self.eadu_ident = result['sale_order_id']

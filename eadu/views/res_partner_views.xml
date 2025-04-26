@@ -8,7 +8,16 @@
         <field name="arch" type="xml">
             <xpath expr="//page[@name='sales_purchases']//field[@name='user_id']" position="after">
                 <field name="eadu_url"/>
-                <field name="eadu_ident"/>
+                <field name="eadu_login"/>
+                <field name="eadu_password"/>
+                <button name="button_generate_eadu_exchange" type="object" class="btn-secondary"
+                    string="Generate EADU Exchange" invisible="eadu_login or eadu_exchanged"/>
+                <field name="eadu_exchange" readonly="True"/>
+                <p>
+                    <field name="eadu_exchanged" invisible="eadu_exchange"/>
+                    <button name="button_process_eadu_exchanged" type="object" class="oe_link"
+                        string="Process EADU Exchange"/>
+                </p>
             </xpath>
         </field>
     </record>

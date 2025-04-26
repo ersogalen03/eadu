@@ -35,6 +35,6 @@ class SaleOrder(models.Model):
             'eadu_ident': self.id, 
             'user_id': partner_user.eadu_ident
             }
-        result = self.env['purchase.order']._eadu_call(self.partner_id, 'eadu/1/purchaseordercreate', params)
+        result = self.partner_id._eadu_call('eadu/1/purchaseordercreate', params)
         self.eadu_ident = result['purchase_id']
 

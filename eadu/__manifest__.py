@@ -2,21 +2,17 @@
 
 {
     'name': "Eadu",
-    'summary': "This module lets a Sale Order automatically create a Purchase Order in the other DB",
+    'summary': "This is the base module to allow setting up the connection between two databases",
     'description': """
 On the partner fill in his URL and your id in his db. 
     """,
     'category': 'Eadu',
     'version': '0.1',
     'depends': [
-        'sale', 
-        'purchase'
+        'mail',
     ],
     'data': [
-        'views/purchase_order_views.xml',
-        'views/sale_order_views.xml',
         'views/res_partner_views.xml',
-        'data/product_data.xml',
     ],
     'demo': [
     ],

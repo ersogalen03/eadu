@@ -10,4 +10,5 @@ class EaduPartnerUser(models.Model):
     partner_id = fields.Many2one('res.partner', 'Eadu Partner Company')
     user_id = fields.Many2one('res.users')
     eadu_ident = fields.Integer('Eadu Identification')
+
     
