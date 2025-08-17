@@ -32,7 +32,9 @@ class MailMessage(models.Model):
                                 'eadu/1/channelcreate', 
                                 {
                                     'name': channel.name,
-                                    'eadu_ident': channel.id,if model == 'discuss.channel':
+                                    'eadu_ident': channel.id,
+                                    
+                if model == 'discuss.channel':
                     channel = self.env['discuss.channel'].browse(res_id)
                     partners = channel.channel_partner_ids
                     user = self.env.user.partner_id

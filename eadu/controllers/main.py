@@ -33,7 +33,7 @@ class TermsController(http.Controller):
     #     return True
 
     @http.route('/eadu/1/connecteadu', type='json', auth='user')
-    def connect_eadu(self, login, password, url):
+    def connect_eadu(self, login, password, url, db, cuserid, cusername):
         user = request.env.user
         partner = user.partner_id.parent_id
         if not user.is_eadu_user:
@@ -43,7 +43,13 @@ class TermsController(http.Controller):
                 'eadu_url': url,
                 'eadu_login': login,
                 'eadu_password': password,
+                'eadu_db': db,
             })
+        partner.sudo().create({
+            'parent_id': partner.id,
+            'name': cusername,
+            'eadu_ident': cuserid,
+        })
 
 
     @http.route('/eadu/1/messagereceive', type='json', auth='user')

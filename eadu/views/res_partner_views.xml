@@ -4,21 +4,27 @@
     <record id="view_partner_eadu_form" model="ir.ui.view">
         <field name="name">res.partner.eadu.form.inherit</field>
         <field name="model">res.partner</field>
-        <field name="inherit_id" ref="sales_team.res_partner_view_team"/>
+            <field name="inherit_id" ref="base.view_partner_form"/>
         <field name="arch" type="xml">
-            <xpath expr="//page[@name='sales_purchases']//field[@name='user_id']" position="after">
-                <field name="eadu_url"/>
-                <field name="eadu_login"/>
-                <field name="eadu_password"/>
-                <button name="button_generate_eadu_exchange" type="object" class="btn-secondary"
-                    string="Generate EADU Exchange" invisible="eadu_login or eadu_exchanged"/>
-                <field name="eadu_exchange" readonly="True"/>
-                <p>
-                    <field name="eadu_exchanged" invisible="eadu_exchange"/>
-                    <button name="button_process_eadu_exchanged" type="object" class="oe_link"
-                        string="Process EADU Exchange"/>
-                </p>
-            </xpath>
+            <notebook position="inside">
+                <page string="EADU Exchange">
+                    <group>
+                        <field name="eadu_url"/>
+                        <field name="eadu_login"/>
+                        <field name="eadu_password"/>
+                    </group>
+                    <group>
+                    <button name="button_generate_eadu_exchange" type="object" class="btn-secondary"
+                        string="Generate EADU Exchange" invisible="eadu_login or eadu_exchanged"/>
+                    </group>
+                    <group>
+                        <field name="eadu_exchanged"/>
+                        <button name="button_process_eadu_exchanged" type="object" class="oe_link"
+                            string="Process EADU Exchange"/>
+                    
+                    </group>
+                </page>
+            </notebook>
         </field>
     </record>
 

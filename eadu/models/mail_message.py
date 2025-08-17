@@ -47,3 +47,15 @@ class MailMessage(models.Model):
                     )
         return super(MailMessage, self).create(val)
     
+
+
+
+
+class EaduMessagePartner(models.Model):
+    _name = "eadu.message.partner"
+    _description = "Link between Messages and Eadu Users"
+
+    message_id = fields.Many2one('mail.message', 'Message')
+    partner_id = fields.Many2one('res.partner', 'Eadu Partner Company')
+    eadu_ident = fields.Integer('Eadu Identification')
+    to_synchronize = fields.Boolean('To Synchronize', default=True)
