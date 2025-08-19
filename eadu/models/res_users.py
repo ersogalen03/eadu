@@ -7,7 +7,7 @@ class ResUsers(models.Model):
     _inherit = "res.users"
 
     # We probably still need this for the message users
-    eadu_ident = fields.Integer("Other Instance ID", copy=False)
+    #eadu_ident = fields.Integer("Other Instance ID", copy=False)
 
     is_eadu_user = fields.Boolean("Is Eadu User", copy=False, groups="base.group_system") # Security measure
     

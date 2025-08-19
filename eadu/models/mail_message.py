@@ -14,19 +14,20 @@ class MailMessage(models.Model):
         result = {}
         if match:= re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
             partner = self.env['res.partner'].browse(int(match.group(1)))
-            user = partner.user_ids.filtered(lambda u: u.eadu_ident)
-            if partner.commercial_partner_id and partner.commercial_partner_id.eadu_ident and user:
+            if partner.eadu_ident and partner.parent_id.eadu_url:
                 model, res_id = self._convert_model(model, res_id)
-                body = re.sub('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', str(user.eadu_ident), body)
-                partner_user = self.env['purchase.order']._search_create_partner_user(partner.commercial_partner_id, self.env.user)
-
+                body = re.sub('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', str(partner.eadu_ident), body)
+                eup = self.env['eadu.partner.user'].sudo().search([('user_id', '=', self.env.user.id), 
+                                                                   ('partner_id', '=', partner.parent_id.id)])
+                print(eup.eadu_ident)
                 result = {
                     'model': model, 
                     'res_id': res_id,
                     'body': body,
-                    'user_id': partner_user.eadu_ident,
+                    'user_id': eup.eadu_ident,
                 }
-        return partner, result
+            return partner, result
+        return False, False
 
     @api.model_create_multi
     def create(self, vals):
@@ -40,16 +41,15 @@ class MailMessage(models.Model):
             if body and model and res_id:
                 partner, result = self._handle_eadu_msg(model, res_id, body)
                 if result and partner:
-                    partner_parent = partner.commercial_partner_id
+                    partner_parent = partner.parent_id # Somehow commercial_partner_id is failing
+                    session = partner_parent._eadu_login()
                     res = partner_parent._eadu_call(
-                        'eadu/1/messagereceive', 
-                        result
+                        '/eadu/1/messagereceive', 
+                        result, 
+                        session=session
                     )
         return super(MailMessage, self).create(val)
     
-
-
-
 
 class EaduMessagePartner(models.Model):
     _name = "eadu.message.partner"

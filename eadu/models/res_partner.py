@@ -15,6 +15,7 @@ from odoo.addons.iap.tools.iap_tools import iap_jsonrpc as jsonrpc
 class ResPartner(models.Model):
     _inherit = "res.partner"
 
+    # Linking 2 companies
     eadu_url = fields.Char("Other Instance URL", copy=False)
     eadu_login = fields.Char("Other Instance Login", copy=False)
     eadu_password = fields.Char("Other Instance Password", copy=False, 
@@ -22,6 +23,9 @@ class ResPartner(models.Model):
     eadu_db = fields.Char("Other Instance DB", copy=False)
     eadu_exchange_token = fields.Char('Token To Exchange', copy=False)
     eadu_exchange_date = fields.Datetime('Exchange Date', copy=False)
+
+    # For individuals of the contact company
+    eadu_ident = fields.Integer("Other Instance ID", copy=False) # For contacts
 
     # This should be in a wizard instead
     eadu_exchanged = fields.Char('Token Exchanged', copy=False)
@@ -67,7 +71,7 @@ class ResPartner(models.Model):
         cuser = self.env.user
         raise odoo.exceptions.UserError(
             _("Copy/paste and tell your contact to use the following code on the partner form of you in his Odoo instance:") + "\n" 
-            + base64.b64encode('#'.join([web_url, user.login, password, dbname, cuser.name, cuser.id]).encode()).decode()
+            + base64.b64encode('#'.join([web_url, user.login, password, dbname, cuser.name, str(cuser.id)]).encode()).decode()
         )
         
 
@@ -109,7 +113,7 @@ class ResPartner(models.Model):
             if child_partner.name != con_arr[4]:
                 child_partner.name = con_arr[4]
         else:
-            self.env['res.partner'].create({
+            child_partner = self.env['res.partner'].create({
                 'name': con_arr[4],
                 'eadu_ident': con_arr[5],
                 'parent_id': self.id,
@@ -117,14 +121,28 @@ class ResPartner(models.Model):
 
         cuser = self.env.user
         session = self._eadu_login()
-        self._eadu_call('/eadu/1/connecteadu', {
+        response = self._eadu_call('/eadu/1/connecteadu', {
             'login': user.login,
             'password': password,
             'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url'),
             'db': self._get_db_name(),
             'cusername': cuser.name,
-            'cuserid': cuser.id, 
+            'cuserid': cuser.id,
+            'ypartnerid': child_partner.id,
+            'yuserid': con_arr[5],
         }, session=session)
+        res = response.json()
+        ypartnerid = res['result']
+        if ypartnerid:
+            epu = self.env['eadu.partner.user'].sudo().search([('partner_id', '=', self.id), ('user_id', '=', cuser.id)])
+            if epu and epu.eadu_ident != ypartnerid:
+                epu.eadu_ident = ypartnerid
+            elif not epu:
+                self.env['eadu.partner.user'].sudo().create({
+                    'partner_id': self.id,
+                    'user_id': cuser.id,
+                    'eadu_ident': ypartnerid,
+                })
 
     def _eadu_call(self, url_ext, params, session=None):
         self.ensure_one()

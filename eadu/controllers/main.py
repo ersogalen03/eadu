@@ -33,36 +33,52 @@ class TermsController(http.Controller):
     #     return True
 
     @http.route('/eadu/1/connecteadu', type='json', auth='user')
-    def connect_eadu(self, login, password, url, db, cuserid, cusername):
+    def connect_eadu(self, login, password, url, db, cuserid, cusername, ypartnerid, yuserid):
+        """
+            cuser: current user of the caller
+            yuser: user that asked for the exchange in this db
+            ypartner: equivalent of yuser in the caller db
+        """
         user = request.env.user
         partner = user.partner_id.parent_id
         if not user.is_eadu_user:
             raise
-        if partner:
-            partner.write({
-                'eadu_url': url,
-                'eadu_login': login,
-                'eadu_password': password,
-                'eadu_db': db,
-            })
-        partner.sudo().create({
+        if not partner:
+            raise
+        partner.write({
+            'eadu_url': url,
+            'eadu_login': login,
+            'eadu_password': password,
+            'eadu_db': db,
+        })
+        # TODO: add and check tokens
+        ypartner = partner.sudo().create({
             'parent_id': partner.id,
             'name': cusername,
             'eadu_ident': cuserid,
         })
+        epu = request.env['eadu.partner.user'].sudo().search([('partner_id', '=', partner.id), ('user_id', '=', yuserid)])
+        if epu and epu.eadu_ident != ypartnerid:
+            epu.eadu_ident = ypartnerid
+        elif not epu:
+            request.env['eadu.partner.user'].sudo().create({
+                'partner_id': partner.id,
+                'user_id': yuserid,
+                'eadu_ident': ypartnerid,
+            })
+        return ypartner.id
 
 
     @http.route('/eadu/1/messagereceive', type='json', auth='user')
-    def message_receive_u(self, user_id, model, res_id, body): # What about the user_id?
+    def message_receive_u(self, model, res_id, body, user_id):
         user = request.env.user
         partner = user.partner_id.parent_id
-        if not user.is_eadu_user:
+        if not partner.eadu_url:
             raise
 
-        message_user = request.env['res.users'].sudo().browse(user_id)
         vals = {
             'body': body,
-            'author_id': user.partner_id.id,
+            'author_id': user_id,
             'res_id': res_id,
             'model': model,
         }
@@ -89,22 +105,22 @@ class TermsController(http.Controller):
 
 
 
-    @http.route('/eadu/1/messagereceive', type='json', auth='public')
-    def message_receive(self, partner_ident, user_id, model, res_id, body):
-        partner = request.env['res.partner'].sudo().browse(partner_ident)
-        if not partner.eadu_ident:
-            raise
-        user = request.env['res.users'].sudo().browse(user_id)
+    # @http.route('/eadu/1/messagereceive', type='json', auth='public')
+    # def message_receive(self, partner_ident, user_id, model, res_id, body):
+    #     partner = request.env['res.partner'].sudo().browse(partner_ident)
+    #     if not partner.eadu_ident:
+    #         raise
+    #     user = request.env['res.users'].sudo().browse(user_id)
 
-        vals = {
-            'body': body,
-            'author_id': user.partner_id.id,
-            'res_id': res_id,
-            'model': model,
-        }
-        message = request.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
+    #     vals = {
+    #         'body': body,
+    #         'author_id': user.partner_id.id,
+    #         'res_id': res_id,
+    #         'model': model,
+    #     }
+    #     message = request.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
 
-        return {'message_id': message.id}
+    #     return {'message_id': message.id}
 
     @http.route('/eadu/1/usercreate', type='json', auth='public')
     def user_create(self, partner_ident, eadu_ident, name):
