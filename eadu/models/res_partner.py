@@ -71,7 +71,7 @@ class ResPartner(models.Model):
         cuser = self.env.user
         raise odoo.exceptions.UserError(
             _("Copy/paste and tell your contact to use the following code on the partner form of you in his Odoo instance:") + "\n" 
-            + base64.b64encode('#'.join([web_url, user.login, password, dbname, cuser.name, str(cuser.id)]).encode()).decode()
+            + base64.b64encode('#'.join([web_url, user.login, password, dbname, cuser.name, str(cuser.partner_id.id)]).encode()).decode()
         )
         
 
@@ -121,17 +121,16 @@ class ResPartner(models.Model):
 
         cuser = self.env.user
         session = self._eadu_login()
-        response = self._eadu_call('/eadu/1/connecteadu', {
+        res = self._eadu_call('/eadu/1/connecteadu', {
             'login': user.login,
             'password': password,
             'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url'),
             'db': self._get_db_name(),
             'cusername': cuser.name,
-            'cuserid': cuser.id,
-            'ypartnerid': child_partner.id,
-            'yuserid': con_arr[5],
+            'cuserid': cuser.partner_id.id,
+            'ypartnerid': child_partner.id, # newly created partner in this db
+            'yuserid': con_arr[5], # is also partner_id in fact
         }, session=session)
-        res = response.json()
         ypartnerid = res['result']
         if ypartnerid:
             epu = self.env['eadu.partner.user'].sudo().search([('partner_id', '=', self.id), ('user_id', '=', cuser.id)])
@@ -157,6 +156,8 @@ class ResPartner(models.Model):
             result = session.post(self.eadu_url + url_ext, json=payload, timeout=15)
         else:
             result = jsonrpc(self.eadu_url + url_ext, params=params)
+        if result.status_code == 200:
+            return result.json()
         return result
 
     def _eadu_login(self):
@@ -183,22 +184,17 @@ class ResPartner(models.Model):
         return session
 
 
-
-
-    # def button_eadu_connect(self):
-    #     self.ensure_one()
-    #     self._eadu_login()
-    #     self.env['res.users'].create({
-    #         'partner_id': self.id,
-    #         'is_eadu_user': True,
-
-    #         'eadu_ident': self.eadu_ident,
-    #     })
-
-    #     self._eadu_call('eadu/1/connecteadu', {
-    #         'username': self.eadu_login,
-    #         'password': self.eadu_password,
-    #         'token': self.env.user.eadu_token,
-    #         'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url')
-    #     })
-
+    @api.model
+    def im_search(self, name, limit=20, excluded_ids=None):
+        """ Search partner with a name and return its id, name and im_status.
+            Note : the user must be logged
+            :param name : the partner name to search
+            :param limit : the limit of result to return
+            :param excluded_ids : the ids of excluded partners
+        """
+        # This method is supposed to be used only in the context of channel creation or
+        # extension via an invite. As both of these actions require the 'create' access
+        # right, we check this specific ACL.
+        res = super().im_search(name, limit=limit, excluded_ids=excluded_ids)
+        eadu_partners = self.search([('eadu_ident', 'not in', [False, 0])])
+        return res + list(eadu_partners.mail_partner_format().values())

@@ -52,7 +52,7 @@ class TermsController(http.Controller):
             'eadu_db': db,
         })
         # TODO: add and check tokens
-        ypartner = partner.sudo().create({
+        ypartnerreturn = partner.sudo().create({
             'parent_id': partner.id,
             'name': cusername,
             'eadu_ident': cuserid,
@@ -63,10 +63,10 @@ class TermsController(http.Controller):
         elif not epu:
             request.env['eadu.partner.user'].sudo().create({
                 'partner_id': partner.id,
-                'user_id': yuserid,
+                'user_id': request.env['res.partner'].sudo().browse(int(yuserid)).user_ids[0].id,
                 'eadu_ident': ypartnerid,
             })
-        return ypartner.id
+        return ypartnerreturn.id
 
 
     @http.route('/eadu/1/messagereceive', type='json', auth='user')
@@ -82,7 +82,11 @@ class TermsController(http.Controller):
             'res_id': res_id,
             'model': model,
         }
-        message = request.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
+        if model == 'discuss.channel':
+            channel = request.env['discuss.channel'].sudo().browse(res_id)
+            message = channel.message_post(author_id= user_id, body=body, message_type='comment', subtype_xmlid='mail.mt_comment')
+        else:
+            message = request.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
 
         return {'message_id': message.id}
 
@@ -104,23 +108,36 @@ class TermsController(http.Controller):
         return {'user_id': user.id}
 
 
+    @http.route('/eadu/1/channelcreate', type='json', auth='user')
+    def channel_create(self, name, eadu_ident, partner_ids):
+        """
+        Create a new mail.channel with the given name and partners.
+        partner_ids: list of res.partner IDs to add to the channel (required).
+        """
+        user = request.env.user
+        if not user.partner_id.parent_id.eadu_url:
+            raise
+        if not partner_ids or not isinstance(partner_ids, list):
+            raise
+        # Ensure the current user's partner is always included
+        #if user.partner_id.id not in partner_ids:
+        #    partner_ids.append(user.partner_id.id)
 
-    # @http.route('/eadu/1/messagereceive', type='json', auth='public')
-    # def message_receive(self, partner_ident, user_id, model, res_id, body):
-    #     partner = request.env['res.partner'].sudo().browse(partner_ident)
-    #     if not partner.eadu_ident:
-    #         raise
-    #     user = request.env['res.users'].sudo().browse(user_id)
+        partners = request.env['res.partner'].sudo().browse(partner_ids)
+        for partner in partners:
+            if partner.user_ids:
+                puser = partner.user_ids[0]
 
-    #     vals = {
-    #         'body': body,
-    #         'author_id': user.partner_id.id,
-    #         'res_id': res_id,
-    #         'model': model,
-    #     }
-    #     message = request.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
-
-    #     return {'message_id': message.id}
+        vals = {
+            'name': name,
+            'channel_partner_ids': [(4, x) for x in partner_ids],
+            'channel_type': 'chat',
+            'eadu_ident': eadu_ident,
+        }
+        print(vals)
+        channel = request.env['discuss.channel'].sudo().with_user(puser).create(vals)
+        return {'channel_id': channel.id}
+    
 
     @http.route('/eadu/1/usercreate', type='json', auth='public')
     def user_create(self, partner_ident, eadu_ident, name):
@@ -134,6 +151,6 @@ class TermsController(http.Controller):
             'eadu_ident': eadu_ident,
         }
         
-        user = request.env['res.users'].sudo().create(vals)
+        user = request.env['res.users'].sudo().with_context(install_mode=True).create(vals)
         user.partner_id.parent_id = partner
         return {'user_id': user.id}
