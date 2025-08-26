@@ -9,28 +9,6 @@ import json
 
 class TermsController(http.Controller):
 
-    # @http.route('/eadu/1/connecteadu', type='json', auth='user')
-    # def connect_eadu(self, username, password, token, url):
-    #     """ 1 portal user is granted a token for Eadu access
-    #     In the db that owns that user the user will put the credentials
-    #     Then when connecting to the db, it will create a portal user himself
-    #     for which it sends the credentials and it sends its own url
-    #       """
-    #     user = self.env.user
-    #     partner = user.partner_id.parent_id
-    #     if user.eadu_token != token:
-    #         raise
-    #     partner.write({
-    #         'eadu_url': url,
-    #         'eadu_login': username,
-    #         'eadu_password': password,
-    #     })
-    #     user.is_eadu_user = True
-    #     # TODO: it could replace the portal user of the original db with the new one through the return
-    #     # That way we would really have the EADU portal users
-        
-        
-    #     return True
 
     @http.route('/eadu/1/connecteadu', type='json', auth='user')
     def connect_eadu(self, login, password, url, db, cuserid, cusername, ypartnerid, yuserid):
@@ -57,20 +35,13 @@ class TermsController(http.Controller):
             'name': cusername,
             'eadu_ident': cuserid,
         })
-        epu = request.env['eadu.partner.user'].sudo().search([('partner_id', '=', partner.id), ('user_id', '=', yuserid)])
-        if epu and epu.eadu_ident != ypartnerid:
-            epu.eadu_ident = ypartnerid
-        elif not epu:
-            request.env['eadu.partner.user'].sudo().create({
-                'partner_id': partner.id,
-                'user_id': request.env['res.partner'].sudo().browse(int(yuserid)).user_ids[0].id,
-                'eadu_ident': ypartnerid,
-            })
+        yuseruser = request.env['res.partner'].sudo().browse(int(yuserid)).user_ids[0].id
+        request.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(partner, 'res.users', yuseruser, ypartnerid)
         return ypartnerreturn.id
 
 
     @http.route('/eadu/1/messagereceive', type='json', auth='user')
-    def message_receive_u(self, model, res_id, body, user_id):
+    def message_receive(self, model, res_id, body, user_id):
         user = request.env.user
         partner = user.partner_id.parent_id
         if not partner.eadu_url:
@@ -84,29 +55,26 @@ class TermsController(http.Controller):
         }
         if model == 'discuss.channel':
             channel = request.env['discuss.channel'].sudo().browse(res_id)
-            message = channel.message_post(author_id= user_id, body=body, message_type='comment', subtype_xmlid='mail.mt_comment')
+            message = channel.with_context(eadu_message=True).message_post(author_id= user_id, body=body, message_type='comment', subtype_xmlid='mail.mt_comment')
         else:
             message = request.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
 
         return {'message_id': message.id}
 
-
-    @http.route('/eadu/1/usercreateu', type='json', auth='public')
-    def user_create_u(self, eadu_ident, name):
-        partner = request.env['res.partner'].sudo().browse(partner_ident)
-        if not partner.eadu_ident:
+    @http.route('/eadu/1/contactcreate', type='json', auth='user')
+    def contact_create(self, eadu_ident, name, email):
+        user = request.env.user
+        partner = user.partner_id.parent_id
+        if not partner.eadu_url:
             raise
         vals = {
             'name': name + ' ' + partner.name,
-            'login': name + '_' + partner.name,
-            'groups_id': [Command.link(request.env.ref('base.group_portal').id)],
             'eadu_ident': eadu_ident,
+            'email': email,
+            'parent_id': partner.id, # TODO: some images and stuff
         }
-        
-        user = request.env['res.users'].sudo().create(vals)
-        user.partner_id.parent_id = partner
-        return {'user_id': user.id}
-
+        created_partner = request.env['res.partner'].sudo().create(vals)
+        return created_partner.id
 
     @http.route('/eadu/1/channelcreate', type='json', auth='user')
     def channel_create(self, name, eadu_ident, partner_ids):
@@ -138,7 +106,6 @@ class TermsController(http.Controller):
         channel = request.env['discuss.channel'].sudo().with_user(puser).create(vals)
         return {'channel_id': channel.id}
     
-
     @http.route('/eadu/1/usercreate', type='json', auth='public')
     def user_create(self, partner_ident, eadu_ident, name):
         partner = request.env['res.partner'].sudo().browse(partner_ident)
