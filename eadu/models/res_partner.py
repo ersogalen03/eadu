@@ -17,9 +17,7 @@ class ResPartner(models.Model):
 
     # Linking 2 companies
     eadu_url = fields.Char("Other Instance URL", copy=False)
-    eadu_login = fields.Char("Other Instance Login", copy=False)
-    eadu_password = fields.Char("Other Instance Password", copy=False, 
-                                groups="base.group_system")
+    eadu_apikey = fields.Char("Other Instance API Key", copy=False, groups="base.group_system")
     eadu_db = fields.Char("Other Instance DB", copy=False)
     eadu_exchange_token = fields.Char('Token To Exchange', copy=False)
     eadu_exchange_date = fields.Datetime('Exchange Date', copy=False)
@@ -72,8 +70,7 @@ class ResPartner(models.Model):
         raise odoo.exceptions.UserError(
             _("Copy/paste and tell your contact to use the following code on the partner form of you in his Odoo instance:") + "\n" 
             + base64.b64encode('#'.join([web_url, user.login, password, dbname, cuser.name, str(cuser.partner_id.id)]).encode()).decode()
-        )
-        
+        )       
 
     def button_process_eadu_exchanged(self):
         self.ensure_one()
@@ -133,15 +130,7 @@ class ResPartner(models.Model):
         }, session=session)
         ypartnerid = res['result']
         if ypartnerid:
-            epu = self.env['eadu.partner.user'].sudo().search([('partner_id', '=', self.id), ('user_id', '=', cuser.id)])
-            if epu and epu.eadu_ident != ypartnerid:
-                epu.eadu_ident = ypartnerid
-            elif not epu:
-                self.env['eadu.partner.user'].sudo().create({
-                    'partner_id': self.id,
-                    'user_id': cuser.id,
-                    'eadu_ident': ypartnerid,
-                })
+            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.users', cuser.id, ypartnerid)
 
     def _eadu_call(self, url_ext, params, session=None):
         self.ensure_one()
@@ -156,7 +145,9 @@ class ResPartner(models.Model):
             result = session.post(self.eadu_url + url_ext, json=payload, timeout=15)
         else:
             result = jsonrpc(self.eadu_url + url_ext, params=params)
+        print(result)
         if result.status_code == 200:
+            print(result.json())
             return result.json()
         return result
 

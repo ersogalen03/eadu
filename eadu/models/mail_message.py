@@ -25,44 +25,53 @@ class MailMessage(models.Model):
                     res_partner = partner
 
             if len(eadu_partners) == 1:
-                epu = self.env['eadu.partner.user'].sudo().search([
-                    ('partner_id', '=', eadu_partners.id),
-                    ('user_id', '=', self.env.user.id)
-                ])
-                if epu:
-                    result_partners.append(epu.eadu_ident)
-                    if not channel.eadu_ident:
-                        session = eadu_partners._eadu_login()
-                        result = eadu_partners._eadu_call(
-                            '/eadu/1/channelcreate', 
-                            {
-                                'name': channel.name,
-                                'eadu_ident': channel.id,
-                                'partner_ids': result_partners,
-                            }, 
-                            session=session
-                        )
-                        if result:
-                            channel.eadu_ident = result.get('result', {}).get('channel_id')
-                            print("Result",     result)
-                    result = {
-                        'model': 'discuss.channel',
-                        'res_id': channel.eadu_ident,
-                        'body': body,
-                        'user_id': epu.eadu_ident,
-                    }
-                    return res_partner, result
+                session = eadu_partners.sudo()._eadu_login()
+                epu = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'res.users', self.env.user.id)
+                # There should be an epu?
+                if not epu:
+                    result = eadu_partners.sudo()._eadu_call(
+                        '/eadu/1/contactcreate',
+                        {
+                            'name': self.env.user.name,
+                            'email': self.env.user.email,
+                            'eadu_ident': self.env.user.id,
+                        },
+                        session=session
+                    )
+                    if result:
+                        epu = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_partners, 'res.users', self.env.user.id, result['result'])
+                    if not epu.eadu_ident:
+                        import pdb; pdb.set_trace()
+                result_partners.append(epu.eadu_ident)
+                if not channel.eadu_ident:
+                    result = eadu_partners.sudo()._eadu_call(
+                        '/eadu/1/channelcreate', 
+                        {
+                            'name': channel.name,
+                            'eadu_ident': channel.id,
+                            'partner_ids': result_partners,
+                        }, 
+                        session=session
+                    )
+                    if result:
+                        channel.eadu_ident = result.get('result', {}).get('channel_id')
+                        print("Result", result)
+                result = {
+                    'model': 'discuss.channel',
+                    'res_id': channel.eadu_ident,
+                    'body': body,
+                    'user_id': epu.eadu_ident,
+                }
+                return res_partner, result
 
         if match:= re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
             partner = self.env['res.partner'].browse(int(match.group(1)))
             if partner.eadu_ident and partner.parent_id.eadu_url:
                 model, res_id = self._convert_model(model, res_id)
                 body = re.sub('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', str(partner.eadu_ident), body)
-                eup = self.env['eadu.partner.user'].sudo().search([('user_id', '=', self.env.user.id), 
-                                                                   ('partner_id', '=', partner.parent_id.id)])
-                print(eup.eadu_ident)
+                eup = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(partner.parent_id, 'res.users', self.env.user.id)
                 result = {
-                    'model': model, 
+                    'model': model,
                     'res_id': res_id, # TODO: better logic please if model is e.g. res_partner
                     'body': body,
                     'user_id': eup.eadu_ident,
