@@ -11,34 +11,29 @@ class TermsController(http.Controller):
 
 
     @http.route('/eadu/1/connecteadu', type='json', auth='user')
-    def connect_eadu(self, login, password, url, db, cuserid, cusername, ypartnerid, yuserid):
+    def connect_eadu(self, apikey, url, db, cusername, cpartnereadu, ypartnereadu, ypartnerid):
         """
-            cuser: current user of the caller
-            yuser: user that asked for the exchange in this db
-            ypartner: equivalent of yuser in the caller db
+            cpartnereadu: current user in the calling db
+            ypartner(eadu): user who set it up in this db originally 
+            the eadu is put when it is not the id in this db
         """
         user = request.env.user
-        partner = user.partner_id.parent_id
+        eadu_contact = user.partner_id
         if not user.is_eadu_user:
             raise
-        if not partner:
+        if not eadu_contact:
             raise
-        partner.write({
+        eadu_contact.sudo().write({
             'eadu_url': url,
-            'eadu_login': login,
-            'eadu_password': password,
+            'eadu_apikey': apikey,
             'eadu_db': db,
         })
-        # TODO: add and check tokens
-        ypartnerreturn = partner.sudo().create({
-            'parent_id': partner.id,
-            'name': cusername,
-            'eadu_ident': cuserid,
-        })
-        yuseruser = request.env['res.partner'].sudo().browse(int(yuserid)).user_ids[0].id
-        request.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(partner, 'res.users', yuseruser, ypartnerid)
+        # We already sync the users that did the exchange, so they 
+        # can already talk to each other
+        ypartnerreturn = eadu_contact.sudo()._create_child_contact(cusername, int(cpartnereadu))
+        ypartner = request.env['res.partner'].sudo().browse(int(ypartnerid))
+        request.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'res.partner', ypartner, ypartnereadu)
         return ypartnerreturn.id
-
 
     @http.route('/eadu/1/messagereceive', type='json', auth='user')
     def message_receive(self, model, res_id, body, user_id):

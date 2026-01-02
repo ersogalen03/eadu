@@ -19,11 +19,9 @@ class ResPartner(models.Model):
     eadu_url = fields.Char("Other Instance URL", copy=False)
     eadu_apikey = fields.Char("Other Instance API Key", copy=False, groups="base.group_system")
     eadu_db = fields.Char("Other Instance DB", copy=False)
-    eadu_exchange_token = fields.Char('Token To Exchange', copy=False)
-    eadu_exchange_date = fields.Datetime('Exchange Date', copy=False)
 
-    # For individuals of the contact company
-    eadu_ident = fields.Integer("Other Instance ID", copy=False) # For contacts
+    # For individuals of the contact company (still not sure we need this one)
+    eadu_ident = fields.Integer("Which partner_id do I have in the other DB", copy=False) # For contacts
 
     # This should be in a wizard instead
     eadu_exchanged = fields.Char('Token Exchanged', copy=False)
@@ -39,141 +37,134 @@ class ResPartner(models.Model):
             return threading.current_thread().dbname
         return db
 
-    def button_generate_eadu_exchange(self):
-        self.ensure_one()
-        # Check if there is a child partner which is linked to an is_eadu user
-        child_partner = self.child_ids.filtered(lambda p: p.user_ids.is_eadu_user)
-        password = uuid.uuid4().hex
-        if not child_partner:
-            child_partner = self.env['res.partner'].create({
+    def _create_update_eadu_child_partner(self):
+        partner = self.commercial_partner_id
+        eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_ident)
+        if not eadu_contact:
+            eadu_contact = self.env['res.partner'].create({
                 'name': "EADU" + self.name,
                 'parent_id': self.id,
             })
             
-            user = self.env['res.users'].create({
-                'partner_id': child_partner.id,
-                'login': "EADU" + self.name.strip().strip('#'),
+            eadu_user = self.env['res.users'].create({
+                'partner_id': eadu_contact.id,
+                #'login': "EADU" + self.name.strip().strip('#'),
                 'is_eadu_user': True,
                 'groups_id': [Command.link(self.env.ref('base.group_portal').id)],
-                'password': password,
             })
+        eadu_contact = eadu_contact[0]
+        return eadu_contact
+ 
+    def _generate_eadu_key(self):
+        """ Generate an API key for an EADU contact (with linked user)"""
+        # TODO: delete existing keys
+        # Generate key
+        ApiKeys = self.env['res.users.apikeys']
+
+        user = self.main_user_id
+        api_key = ApiKeys.with_user(user).sudo()._generate(scope='rpc', name='Eadu connection')
+        return api_key
+
+    def _create_child_contact(self, name, eadu_ident):
+        """
+            self is the eadu contact
+        """
+        self.ensure_one()
+        partner = self.commercial_partner_id
+        child_partner = partner.child_ids.filtered(lambda p: p.name == name)
+        eadu_rec = self.env['eadu.partner.any']._search_for_eadu_partner(self, 'res.partner', eadu_ident)
+        if eadu_rec:
+            eadu_rec._get_record().name = name
+        elif child_partner:
+            # could be just a create
+            self.env['eadu.partner.any']._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
         else:
-            user = child_partner.user_ids.filtered(lambda u: u.is_eadu_user)
-            user.password = password
+            child_partner = self.env['res.partner'].create({
+                'name': name,
+                'parent_id': partner.id,
+            })
+            self.env['eadu.partner.any']._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
+        return child_partner
+
+
+    def button_generate_eadu_exchange(self):
+        self.ensure_one()
+        # Check if there is a child partner which is linked to an is_eadu user
+        eadu_contact = self._create_update_eadu_child_partner()
+        api_key = eadu_contact._generate_eadu_key()
 
         web_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         dbname = self._get_db_name()
-        self.eadu_exchange_date = fields.Datetime.now()
-        self.eadu_exchange_token = uuid.uuid4() # TODO: use it in the return stuff
         self.env.cr.commit()
-        cuser = self.env.user
+        cuser = self.env.user # To already create yourself in the other db (if you have not been already)
         raise odoo.exceptions.UserError(
             _("Copy/paste and tell your contact to use the following code on the partner form of you in his Odoo instance:") + "\n" 
-            + base64.b64encode('#'.join([web_url, user.login, password, dbname, cuser.name, str(cuser.partner_id.id)]).encode()).decode()
-        )       
+            + base64.b64encode('#'.join([web_url, api_key, dbname, cuser.name, str(cuser.partner_id.id)]).encode()).decode()
+        )
 
     def button_process_eadu_exchanged(self):
         self.ensure_one()
         # Decode the exchange token
         con_str = base64.b64decode(self.eadu_exchanged.encode()).decode()
         con_arr = con_str.split('#')
-        self.eadu_url = con_arr[0]
-        self.eadu_login = con_arr[1]
-        self.eadu_password = con_arr[2]
-        self.eadu_db = con_arr[3]
 
 
-        # Check if the partner is already linked to an EADU user
-        child_partner = self.child_ids.filtered(lambda p: p.user_ids.is_eadu_user)
-        password = uuid.uuid4().hex
-        if not child_partner:
-            # Create a new child partner and user
-            child_partner = self.env['res.partner'].create({
-                'name': "EADU" + self.name,
-                'parent_id': self.id,
-            })
-            user = self.env['res.users'].create({
-                'partner_id': child_partner.id,
-                'login': "EADU" + self.name.strip().strip('#'),
-                'is_eadu_user': True,
-                'groups_id': [Command.link(self.env.ref('base.group_portal').id)],
-                'password': password,
-            })
-        else:
-            user = child_partner.user_ids.filtered(lambda u: u.is_eadu_user)
-            user.password = password
-
-        child_partner = self.child_ids.filtered(lambda p: p.name == con_arr[4] or p.eadu_ident == con_arr[5])
-        if child_partner:
-            if not child_partner.eadu_ident or child_partner.eadu_ident != con_arr[5]:
-                child_partner.eadu_ident = con_arr[5]
-            if child_partner.name != con_arr[4]:
-                child_partner.name = con_arr[4]
-        else:
-            child_partner = self.env['res.partner'].create({
-                'name': con_arr[4],
-                'eadu_ident': con_arr[5],
-                'parent_id': self.id,
-            })
-
+        eadu_contact = self._create_update_eadu_child_partner()
+        eadu_contact.eadu_url = con_arr[0]
+        eadu_contact.eadu_apikey = con_arr[1]
+        eadu_contact.eadu_db = con_arr[2]
+        apikey = eadu_contact._generate_eadu_key()
+        connecting_contact = eadu_contact._create_child_contact(con_arr[3], int(con_arr[4]))
         cuser = self.env.user
-        session = self._eadu_login()
-        res = self._eadu_call('/eadu/1/connecteadu', {
-            'login': user.login,
-            'password': password,
+        res = eadu_contact._eadu_call('res.partner', 'action_connect_eadu', {
+            'apikey': apikey,
             'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url'),
             'db': self._get_db_name(),
             'cusername': cuser.name,
-            'cuserid': cuser.partner_id.id,
-            'ypartnerid': child_partner.id, # newly created partner in this db
-            'yuserid': con_arr[5], # is also partner_id in fact
-        }, session=session)
+            'cpartnereadu': cuser.partner_id.id,
+            'ypartnereadu': connecting_contact.id, # newly created partner in this db
+            'ypartnerid': con_arr[4], # for the contacted db to verify who started it originally
+        })
         ypartnerid = res['result']
         if ypartnerid:
             self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.users', cuser.id, ypartnerid)
 
-    def _eadu_call(self, url_ext, params, session=None):
+    def action_connect_eadu(self, apikey, url, db, cusername, cpartnereadu, ypartnereadu, ypartnerid):
+        user = self.env.user
+        eadu_contact = user.partner_id
+        if not user.is_eadu_user: # + we could check that they correspond
+            raise
+        if not eadu_contact.parent_id:
+            raise
+        eadu_contact.sudo().write({
+            'eadu_url': url,
+            'eadu_apikey': apikey,
+            'eadu_db': db,
+        })
+        # We already sync the users that did the exchange, so they 
+        # can already talk to each other
+        ypartnerreturn = eadu_contact.sudo()._create_child_contact(cusername, int(cpartnereadu))
+        ypartner = self.env['res.partner'].sudo().browse(int(ypartnerid))
+        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'res.partner', ypartner, ypartnereadu)
+        return ypartnerreturn.id
+
+    def _eadu_call(self, model, method, params):
+        """
+        self = eaducontact
+        """
         self.ensure_one()
-        result = False
-        if session:
-            payload = {
-                'jsonrpc': '2.0',
-                'method': 'call',
-                'params': params,
-                'id': uuid.uuid4().hex,
-            }
-            result = session.post(self.eadu_url + url_ext, json=payload, timeout=15)
-        else:
-            result = jsonrpc(self.eadu_url + url_ext, params=params)
-        print(result)
-        if result.status_code == 200:
-            print(result.json())
-            return result.json()
+
+        result = requests.post(
+            f"https://{self.eadu_url}/json/2/{model}/{method}",
+            headers={
+                "X-Odoo-Database": self.eadu_db,
+                "Authorization": f"bearer {self.eadu_apikey}",
+            },
+            json=params,
+        ).json()
+        # TODO: error handling and stuff
+
         return result
-
-    def _eadu_login(self):
-        login_url = f"{self.eadu_url}/web/session/authenticate"
-
-        # Login payload
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "call",
-            "params": {
-                # TODO: check if we need db
-                "login": self.eadu_login,
-                "password": self.eadu_password,
-                "db": self.eadu_db,
-            }
-        }
-
-        # Headers
-        headers = {"Content-Type": "application/json"}
-
-        # Send login request
-        session = requests.Session()
-        response = session.post(login_url, data=json.dumps(payload), headers=headers)
-        return session
-
 
     @api.model
     def im_search(self, name, limit=20, excluded_ids=None):
