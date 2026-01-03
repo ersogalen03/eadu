@@ -4,18 +4,16 @@
     <record id="view_partner_eadu_form" model="ir.ui.view">
         <field name="name">res.partner.eadu.form.inherit</field>
         <field name="model">res.partner</field>
-            <field name="inherit_id" ref="base.view_partner_form"/>
+        <field name="inherit_id" ref="base.view_partner_form"/>
         <field name="arch" type="xml">
             <notebook position="inside">
                 <page string="EADU Exchange">
                     <group>
                         <field name="eadu_url"/>
-                        <field name="eadu_login"/>
-                        <field name="eadu_password"/>
                     </group>
                     <group>
                     <button name="button_generate_eadu_exchange" type="object" class="btn-secondary"
-                        string="Generate EADU Exchange" invisible="eadu_login or eadu_exchanged"/>
+                        string="Generate EADU Exchange" invisible="eadu_url or eadu_exchanged"/>
                     </group>
                     <group>
                         <field name="eadu_exchanged"/>
@@ -27,6 +25,4 @@
             </notebook>
         </field>
     </record>
-
-
 </odoo>

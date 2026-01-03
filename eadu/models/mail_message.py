@@ -19,62 +19,59 @@ class MailMessage(models.Model):
             eadu_partners = self.env['res.partner']
             res_partner = self.env['res.partner']
             for partner in partners:
-                if partner.eadu_ident:
-                    eadu_partners |= partner.parent_id # if eadu_url
-                    result_partners.append(partner.eadu_ident)
-                    res_partner = partner
+                if eadu_p := partner._get_eadu_partner():
+                    eadu_partners |= eadu_p
 
             if len(eadu_partners) == 1:
-                session = eadu_partners.sudo()._eadu_login()
-                epu = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'res.users', self.env.user.id)
+                epu = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'res.partner', self.env.user.partner_id.id)
                 # There should be an epu?
                 if not epu:
                     result = eadu_partners.sudo()._eadu_call(
-                        '/eadu/1/contactcreate',
+                        'res.partner',
+                        'action_eadu_create_contact',
                         {
                             'name': self.env.user.name,
                             'email': self.env.user.email,
-                            'eadu_ident': self.env.user.id,
-                        },
-                        session=session
+                            'eadu_ident': self.env.user.partner_id.id,
+                        }
                     )
                     if result:
-                        epu = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_partners, 'res.users', self.env.user.id, result['result'])
-                    if not epu.eadu_ident:
-                        import pdb; pdb.set_trace()
-                result_partners.append(epu.eadu_ident)
-                if not channel.eadu_ident:
+                        epu = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_partners, 'res.partner', self.env.user.partner_id.id, result['result'])
+                result_partners = []
+                for partner in partners:
+                    if epa := self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'res.partner', partner.id):
+                        result_partners.append(epa.eadu_ident)
+                if not self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'discuss.channel', channel.id):
                     result = eadu_partners.sudo()._eadu_call(
-                        '/eadu/1/channelcreate', 
+                        'discuss.channel',
+                        'action_eadu_channel_create', 
                         {
                             'name': channel.name,
                             'eadu_ident': channel.id,
                             'partner_ids': result_partners,
-                        }, 
-                        session=session
+                        },                     
                     )
                     if result:
-                        channel.eadu_ident = result.get('result', {}).get('channel_id')
-                        print("Result", result)
+                        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_partners, 'discuss.channel', channel.id, result['channel_id'])
                 result = {
                     'model': 'discuss.channel',
                     'res_id': channel.eadu_ident,
                     'body': body,
-                    'user_id': epu.eadu_ident,
+                    'partner_id': epu.eadu_ident,
                 }
                 return res_partner, result
 
         if match:= re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
             partner = self.env['res.partner'].browse(int(match.group(1)))
-            if partner.eadu_ident and partner.parent_id.eadu_url:
+            if eadu_contact := partner._get_eadu_partner():
                 model, res_id = self._convert_model(model, res_id)
                 body = re.sub('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', str(partner.eadu_ident), body)
-                eup = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(partner.parent_id, 'res.users', self.env.user.id)
+                eup = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_contact, 'res.partner', self.env.user.partner_id.id)
                 result = {
                     'model': model,
                     'res_id': res_id, # TODO: better logic please if model is e.g. res_partner
                     'body': body,
-                    'user_id': eup.eadu_ident,
+                    'partner_id': eup.eadu_ident,
                 }
             return partner, result
         return False, False
@@ -91,21 +88,28 @@ class MailMessage(models.Model):
             if body and model and res_id:
                 partner, result = self._handle_eadu_msg(model, res_id, body)
                 if result and partner:
-                    partner_parent = partner.parent_id # Somehow commercial_partner_id is failing
-                    session = partner_parent._eadu_login()
-                    res = partner_parent._eadu_call(
-                        '/eadu/1/messagereceive', 
+                    res = partner._get_eadu_partner()._eadu_call(
+                        'mail.message',
+                        'action_eadu_receive', 
                         result, 
-                        session=session
                     )
         return super(MailMessage, self).create(val)
-    
 
-class EaduMessagePartner(models.Model):
-    _name = "eadu.message.partner"
-    _description = "Link between Messages and Eadu Users"
+    def action_eadu_receive(self, model, res_id, body, partner_id):
+        eadu_contact = self.env.user.partner_id
+        if not eadu_contact.eadu_url:
+            raise
 
-    message_id = fields.Many2one('mail.message', 'Message')
-    partner_id = fields.Many2one('res.partner', 'Eadu Partner Company')
-    eadu_ident = fields.Integer('Eadu Identification')
-    to_synchronize = fields.Boolean('To Synchronize', default=True)
+        vals = {
+            'body': body,
+            'author_id': partner_id,
+            'res_id': res_id,
+            'model': model,
+        }
+        if model == 'discuss.channel':
+            channel = self.env['discuss.channel'].sudo().browse(res_id)
+            message = channel.with_context(eadu_message=True).message_post(author_id=partner_id, body=body, message_type='comment', subtype_xmlid='mail.mt_comment')
+        else:
+            message = self.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
+
+        return {'message_id': message.id}

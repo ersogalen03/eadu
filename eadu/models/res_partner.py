@@ -27,6 +27,12 @@ class ResPartner(models.Model):
     eadu_exchanged = fields.Char('Token Exchanged', copy=False)
 
 
+    def _get_eadu_partner(self):
+        self.ensure_one()
+        partner = self.commercial_partner_id
+        eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_url)
+        return eadu_contact and eadu_contact[0] or eadu_contact
+
     def _get_db_name(self):
         db = odoo.tools.config['db_name']
         # If the database name is not provided on the command-line,
@@ -35,24 +41,27 @@ class ResPartner(models.Model):
         # database from XML-RPC).
         if not db and hasattr(threading.current_thread(), 'dbname'):
             return threading.current_thread().dbname
-        return db
+        return db and db[0] or None
 
     def _create_update_eadu_child_partner(self):
         partner = self.commercial_partner_id
-        eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_ident)
+        eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_url)
         if not eadu_contact:
-            eadu_contact = self.env['res.partner'].create({
-                'name': "EADU" + self.name,
-                'parent_id': self.id,
-            })
-            
-            eadu_user = self.env['res.users'].create({
-                'partner_id': eadu_contact.id,
-                #'login': "EADU" + self.name.strip().strip('#'),
-                'is_eadu_user': True,
-                'groups_id': [Command.link(self.env.ref('base.group_portal').id)],
-            })
-        eadu_contact = eadu_contact[0]
+            eadu_contact = self.env['res.partner'].search([('name', '=', "EADU" + partner.name), ('parent_id', '=', partner.id)], limit=1)
+            if not eadu_contact:
+                eadu_contact = self.env['res.partner'].create({
+                    'name': "EADU" + partner.name,
+                    'parent_id': partner.id,
+                })
+            eadu_user = self.env['res.users'].search([('partner_id', '=', eadu_contact.id), 
+                                                      ('is_eadu_user', '=', True)])
+            if not eadu_user:        
+                eadu_user = self.env['res.users'].create({
+                    'partner_id': eadu_contact.id,
+                    'login': "EADU" + self.name.strip().strip('#'),
+                    'is_eadu_user': True,
+                    'group_ids': [Command.link(self.env.ref('base.group_portal').id)],
+                })
         return eadu_contact
  
     def _generate_eadu_key(self):
@@ -62,7 +71,10 @@ class ResPartner(models.Model):
         ApiKeys = self.env['res.users.apikeys']
 
         user = self.main_user_id
-        api_key = ApiKeys.with_user(user).sudo()._generate(scope='rpc', name='Eadu connection')
+        api_key = ApiKeys.with_user(user).sudo()._generate(scope='rpc', 
+                                                           name='Eadu connection',
+                                                           expiration_date=None
+                                                           )
         return api_key
 
     def _create_child_contact(self, name, eadu_ident):
@@ -72,18 +84,18 @@ class ResPartner(models.Model):
         self.ensure_one()
         partner = self.commercial_partner_id
         child_partner = partner.child_ids.filtered(lambda p: p.name == name)
-        eadu_rec = self.env['eadu.partner.any']._search_for_eadu_partner(self, 'res.partner', eadu_ident)
+        eadu_rec = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(self, 'res.partner', eadu_ident)
         if eadu_rec:
             eadu_rec._get_record().name = name
         elif child_partner:
             # could be just a create
-            self.env['eadu.partner.any']._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
+            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
         else:
             child_partner = self.env['res.partner'].create({
                 'name': name,
                 'parent_id': partner.id,
             })
-            self.env['eadu.partner.any']._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
+            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
         return child_partner
 
 
@@ -146,16 +158,25 @@ class ResPartner(models.Model):
         ypartnerreturn = eadu_contact.sudo()._create_child_contact(cusername, int(cpartnereadu))
         ypartner = self.env['res.partner'].sudo().browse(int(ypartnerid))
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'res.partner', ypartner, ypartnereadu)
-        return ypartnerreturn.id
+        return {'result': ypartnerreturn.id}
+
+    def action_eadu_create_contact(self, eadu_ident, name, email):
+        eadu_contact = self.env.user.partner_id
+        if not eadu_contact.eadu_url:
+            raise
+        partner = eadu_contact._create_child_contact(name, eadu_ident)
+        partner.email = email
+        return {'result': partner.id}      
 
     def _eadu_call(self, model, method, params):
         """
         self = eaducontact
         """
         self.ensure_one()
-
+        url = f"{self.eadu_url}/json/2/{model}/{method}"
+        print("URL", url)
         result = requests.post(
-            f"https://{self.eadu_url}/json/2/{model}/{method}",
+            url,
             headers={
                 "X-Odoo-Database": self.eadu_db,
                 "Authorization": f"bearer {self.eadu_apikey}",

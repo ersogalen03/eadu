@@ -97,7 +97,6 @@ class TermsController(http.Controller):
             'channel_type': 'chat',
             'eadu_ident': eadu_ident,
         }
-        print(vals)
         channel = request.env['discuss.channel'].sudo().with_user(puser).create(vals)
         return {'channel_id': channel.id}
     
