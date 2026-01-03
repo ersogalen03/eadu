@@ -41,7 +41,8 @@ class MailMessage(models.Model):
                 for partner in partners:
                     if epa := self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'res.partner', partner.id):
                         result_partners.append(epa.eadu_ident)
-                if not self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'discuss.channel', channel.id):
+                channel_eadu_ident = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'discuss.channel', channel.id).eadu_ident
+                if not channel_eadu_ident:
                     result = eadu_partners.sudo()._eadu_call(
                         'discuss.channel',
                         'action_eadu_channel_create', 
@@ -53,13 +54,14 @@ class MailMessage(models.Model):
                     )
                     if result:
                         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_partners, 'discuss.channel', channel.id, result['channel_id'])
+                        channel_eadu_ident = result['channel_id']
                 result = {
                     'model': 'discuss.channel',
-                    'res_id': channel.eadu_ident,
+                    'res_id': channel_eadu_ident,
                     'body': body,
                     'partner_id': epu.eadu_ident,
                 }
-                return res_partner, result
+                return eadu_partners, result
 
         if match:= re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
             partner = self.env['res.partner'].browse(int(match.group(1)))
@@ -73,7 +75,7 @@ class MailMessage(models.Model):
                     'body': body,
                     'partner_id': eup.eadu_ident,
                 }
-            return partner, result
+            return eadu_contact, result
         return False, False
 
     @api.model_create_multi
@@ -87,13 +89,17 @@ class MailMessage(models.Model):
             result = False
             if body and model and res_id:
                 partner, result = self._handle_eadu_msg(model, res_id, body)
+                print(result)
                 if result and partner:
-                    res = partner._get_eadu_partner()._eadu_call(
+                    res = partner._eadu_call(
                         'mail.message',
                         'action_eadu_receive', 
                         result, 
                     )
-        return super(MailMessage, self).create(val)
+                    # TODO: refer message
+                    #if res and 'message_id' in res:
+                    #    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(partner, 'mail.message', result['res_id'], res['message_id'])
+            return super(MailMessage, self).create(val)
 
     def action_eadu_receive(self, model, res_id, body, partner_id):
         eadu_contact = self.env.user.partner_id

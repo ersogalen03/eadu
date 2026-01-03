@@ -1,15 +1,12 @@
 # Part of Eadu. See LICENSE file for full copyright and licensing details.
 
-import json
 import requests
-import uuid
 import base64
 import odoo
 import threading
 
 from odoo import api, fields, models, Command, _
-from odoo.addons.iap.tools.iap_tools import iap_jsonrpc as jsonrpc
-
+from odoo.addons.mail.tools.discuss import Store
 
 
 class ResPartner(models.Model):
@@ -84,7 +81,7 @@ class ResPartner(models.Model):
         self.ensure_one()
         partner = self.commercial_partner_id
         child_partner = partner.child_ids.filtered(lambda p: p.name == name)
-        eadu_rec = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(self, 'res.partner', eadu_ident)
+        eadu_rec = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(self, 'res.partner', child_partner.id)
         if eadu_rec:
             eadu_rec._get_record().name = name
         elif child_partner:
@@ -187,17 +184,18 @@ class ResPartner(models.Model):
 
         return result
 
+    @api.readonly
     @api.model
-    def im_search(self, name, limit=20, excluded_ids=None):
-        """ Search partner with a name and return its id, name and im_status.
-            Note : the user must be logged
-            :param name : the partner name to search
-            :param limit : the limit of result to return
-            :param excluded_ids : the ids of excluded partners
-        """
-        # This method is supposed to be used only in the context of channel creation or
-        # extension via an invite. As both of these actions require the 'create' access
-        # right, we check this specific ACL.
-        res = super().im_search(name, limit=limit, excluded_ids=excluded_ids)
-        eadu_partners = self.search([('eadu_ident', 'not in', [False, 0])])
-        return res + list(eadu_partners.mail_partner_format().values())
+    def _search_for_channel_invite(self, store: Store, search_term, channel_id=None, limit=30):
+        res = super()._search_for_channel_invite(store, search_term, channel_id=channel_id, limit=limit)
+        partner_ids = self.env['eadu.partner.any'].sudo().search([('res_model', '=', 'res.partner')]).mapped('res_id')
+        partners = self.browse(partner_ids)
+        partners.filtered(lambda p: not p.user_ids)
+        channel = self.env["discuss.channel"]
+        if channel_id:
+            channel = channel.browse(channel_id)
+        partners._search_for_channel_invite_to_store(store, channel)
+        return {
+            "count": len(partners) + res['count'],
+            "partner_ids": res['partner_ids'] + partners.ids,
+        }
