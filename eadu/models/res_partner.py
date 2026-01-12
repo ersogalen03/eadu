@@ -49,6 +49,8 @@ class ResPartner(models.Model):
                 eadu_contact = self.env['res.partner'].create({
                     'name': "EADU" + partner.name,
                     'parent_id': partner.id,
+                    'company_type': 'person',
+                    'type': 'other', 
                 })
             eadu_user = self.env['res.users'].search([('partner_id', '=', eadu_contact.id), 
                                                       ('is_eadu_user', '=', True)])
@@ -91,6 +93,8 @@ class ResPartner(models.Model):
             child_partner = self.env['res.partner'].create({
                 'name': name,
                 'parent_id': partner.id,
+                'company_type': 'person',
+                'type': 'contact', 
             })
             self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
         return child_partner
@@ -199,3 +203,9 @@ class ResPartner(models.Model):
             "count": len(partners) + res['count'],
             "partner_ids": res['partner_ids'] + partners.ids,
         }
+    
+    def write(self, vals):
+        res = super().write(vals)
+        for partner in self:
+            self.env['eadu.partner.any'].sudo()._sync_with_others('res.partner', partner.id, vals)
+        return res

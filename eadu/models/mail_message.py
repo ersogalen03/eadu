@@ -1,5 +1,6 @@
 # Part of Eadu. See LICENSE file for full copyright and licensing details.
 
+from markupsafe import Markup
 from odoo import api, fields, models
 
 import re
@@ -17,7 +18,6 @@ class MailMessage(models.Model):
             partners = channel.channel_partner_ids
             result_partners = []
             eadu_partners = self.env['res.partner']
-            res_partner = self.env['res.partner']
             for partner in partners:
                 if eadu_p := partner._get_eadu_partner():
                     eadu_partners |= eadu_p
@@ -82,32 +82,37 @@ class MailMessage(models.Model):
     def create(self, vals):
         if self.env.context.get('eadu_message'):
             return super(MailMessage, self).create(vals)
+        recs = self.env['mail.message']
         for val in vals:
+            created_record = super(MailMessage, self).create(val)
             body = val['body']
             model = val.get('model')
             res_id = val.get('res_id')
             result = False
             if body and model and res_id:
                 partner, result = self._handle_eadu_msg(model, res_id, body)
-                print(result)
                 if result and partner:
+                    result['eadu_ident'] = created_record.id
                     res = partner._eadu_call(
                         'mail.message',
                         'action_eadu_receive', 
                         result, 
                     )
-                    # TODO: refer message
-                    #if res and 'message_id' in res:
-                    #    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(partner, 'mail.message', result['res_id'], res['message_id'])
-            return super(MailMessage, self).create(val)
+                    if res and 'message_id' in res:
+                        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(partner, 'mail.message', created_record.id, res['message_id'])
 
-    def action_eadu_receive(self, model, res_id, body, partner_id):
+            recs += created_record
+        return recs
+                    
+
+    def action_eadu_receive(self, model, res_id, body, partner_id, eadu_ident):
         eadu_contact = self.env.user.partner_id
         if not eadu_contact.eadu_url:
             raise
 
+
         vals = {
-            'body': body,
+            'body': Markup(body),
             'author_id': partner_id,
             'res_id': res_id,
             'model': model,
@@ -118,4 +123,14 @@ class MailMessage(models.Model):
         else:
             message = self.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
 
+        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'mail.message', message.id, eadu_ident)
+
         return {'message_id': message.id}
+
+    def write(self, vals):
+        res = super().write(vals)
+        if not self.env.context.get('eadu_message'):
+            for message in self:
+                print('sync with others', message.id, vals)
+                self.env['eadu.partner.any'].sudo()._sync_with_others('mail.message', message.id, vals)
+        return res

@@ -12,6 +12,7 @@ On the partner fill in his URL and your id in his db.
         'mail',
     ],
     'data': [
+        'data/ir_cron.xml',
         'views/res_partner_views.xml',
     ],
     'demo': [
