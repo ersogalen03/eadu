@@ -3,3 +3,5 @@ from . import eadu_partner_any
 from . import res_users
 from . import mail_message
 from . import discuss_channel
+from . import ir_attachment
+from . import mail_message_reaction

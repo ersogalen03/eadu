@@ -93,10 +93,35 @@ class MailMessage(models.Model):
                 partner, result = self._handle_eadu_msg(model, res_id, body)
                 if result and partner:
                     result['eadu_ident'] = created_record.id
+                    # Pre-create remote attachments unattached and collect their remote IDs
+                    remote_attachment_ids = []
+                    for att in created_record.attachment_ids.sudo():
+                        payload = {
+                            'name': att.name,
+                            'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
+                            'mimetype': att.mimetype,
+                            'res_model': None,
+                            'res_id': None,
+                            'eadu_ident': att.id,
+                        }
+                        try:
+                            a_res = partner.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', payload)
+                            if a_res and 'attachment_id' in a_res:
+                                remote_attachment_ids.append(a_res['attachment_id'])
+                                self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                                    partner, 'ir.attachment', att.id, a_res['attachment_id']
+                                )
+                        except Exception:
+                            # continue even if one attachment fails
+                            pass
+
+                    # Create the remote message, passing collected remote attachment ids
+                    result_with_atts = dict(result)
+                    result_with_atts['attachment_ids'] = remote_attachment_ids
                     res = partner._eadu_call(
                         'mail.message',
                         'action_eadu_receive', 
-                        result, 
+                        result_with_atts, 
                     )
                     if res and 'message_id' in res:
                         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(partner, 'mail.message', created_record.id, res['message_id'])
@@ -105,7 +130,7 @@ class MailMessage(models.Model):
         return recs
                     
 
-    def action_eadu_receive(self, model, res_id, body, partner_id, eadu_ident):
+    def action_eadu_receive(self, model, res_id, body, partner_id, eadu_ident, attachment_ids=None):
         eadu_contact = self.env.user.partner_id
         if not eadu_contact.eadu_url:
             raise
@@ -117,11 +142,20 @@ class MailMessage(models.Model):
             'res_id': res_id,
             'model': model,
         }
-        if model == 'discuss.channel':
-            channel = self.env['discuss.channel'].sudo().browse(res_id)
-            message = channel.with_context(eadu_message=True).message_post(author_id=partner_id, body=body, message_type='comment', subtype_xmlid='mail.mt_comment')
-        else:
-            message = self.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
+        #TODO: check that attachment_ids are legal...
+        if attachment_ids:
+            self.env['ir.attachment'].browse(attachment_ids).sudo().write({'res_model': model, 'res_id': res_id})
+            vals['attachment_ids'] = [(4, aid) for aid in attachment_ids]
+        message = self.env['mail.message'].with_context(eadu_message=True).sudo().create(vals)
+        # We want user to be notified of the new message
+        try:
+            # Trigger the same notification pipeline as message_post
+            self.env[model].sudo().browse(res_id)._notify_thread(message)
+        except Exception:
+            # Do not block sync on notification errors
+            pass
+
+         # Create the eadu.partner.any linkage
 
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'mail.message', message.id, eadu_ident)
 
@@ -131,6 +165,35 @@ class MailMessage(models.Model):
         res = super().write(vals)
         if not self.env.context.get('eadu_message'):
             for message in self:
-                print('sync with others', message.id, vals)
+                print('sync with others', message.id)
+                # If this is a discuss.channel message and attachments were updated, ensure remote linkage
+                if message.model == 'discuss.channel' and ('attachment_ids' in vals or message.attachment_ids):
+                    # For each remote partner mapping of this message, push new attachments and link to remote message
+                    eadu_anys = self.env['eadu.partner.any'].sudo().search([
+                        ('res_model', '=', 'mail.message'), ('res_id', '=', message.id)
+                    ])
+                    for eadu_any in eadu_anys:
+                        for att in message.attachment_ids.sudo():
+                            # Skip if this attachment already mapped for this partner
+                            remote_att = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_any.partner_id, 'ir.attachment', att.id)
+                            if remote_att:
+                                continue
+                            payload = {
+                                'name': att.name,
+                                'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
+                                'mimetype': att.mimetype,
+                                'res_model': 'mail.message',
+                                'res_id': eadu_any.eadu_ident,
+                                'eadu_ident': att.id,
+                            }
+                            try:
+                                a_res = eadu_any.partner_id.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', payload)
+                                if a_res and 'attachment_id' in a_res:
+                                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                                        eadu_any.partner_id, 'ir.attachment', att.id, a_res['attachment_id']
+                                    )
+                            except Exception:
+                                pass
+
                 self.env['eadu.partner.any'].sudo()._sync_with_others('mail.message', message.id, vals)
         return res
