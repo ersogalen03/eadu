@@ -52,14 +52,15 @@ class ResPartner(models.Model):
                     'company_type': 'person',
                     'type': 'other', 
                 })
-            eadu_user = self.env['res.users'].search([('partner_id', '=', eadu_contact.id), 
-                                                      ('is_eadu_user', '=', True)])
+            eadu_user = self.env['res.users'].search([
+                ('partner_id', '=', eadu_contact.id),
+                ('groups_id', 'in', self.env.ref('eadu.group_portal_eadu').id)
+            ])
             if not eadu_user:        
                 eadu_user = self.env['res.users'].create({
                     'partner_id': eadu_contact.id,
                     'login': "EADU" + self.name.strip().strip('#'),
-                    'is_eadu_user': True,
-                    'group_ids': [Command.link(self.env.ref('base.group_portal').id)],
+                    'group_ids': [Command.link(self.env.ref('eadu.group_portal_eadu').id)],
                 })
         return eadu_contact
  
@@ -145,7 +146,7 @@ class ResPartner(models.Model):
     def action_connect_eadu(self, apikey, url, db, cusername, cpartnereadu, ypartnereadu, ypartnerid):
         user = self.env.user
         eadu_contact = user.partner_id
-        if not user.is_eadu_user: # + we could check that they correspond
+        if not user.has_group('eadu.group_portal_eadu'): # + we could check that they correspond
             raise
         if not eadu_contact.parent_id:
             raise
@@ -194,14 +195,18 @@ class ResPartner(models.Model):
         res = super()._search_for_channel_invite(store, search_term, channel_id=channel_id, limit=limit)
         partner_ids = self.env['eadu.partner.any'].sudo().search([('res_model', '=', 'res.partner')]).mapped('res_id')
         partners = self.browse(partner_ids)
-        partners.filtered(lambda p: not p.user_ids)
+        partners = partners.filtered(lambda p: not p.user_ids)
+        import pdb; pdb.set_trace()
+
         channel = self.env["discuss.channel"]
         if channel_id:
             channel = channel.browse(channel_id)
-        partners._search_for_channel_invite_to_store(store, channel)
+        
+        partners._search_for_channel_invite_to_store(store, channel) 
+        partner_ids = list(set(res['partner_ids'] + partners.ids))
         return {
-            "count": len(partners) + res['count'],
-            "partner_ids": res['partner_ids'] + partners.ids,
+            "count": len(partner_ids),
+            "partner_ids": partner_ids,
         }
     
     def write(self, vals):

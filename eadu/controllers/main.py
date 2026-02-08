@@ -19,7 +19,7 @@ class TermsController(http.Controller):
         """
         user = request.env.user
         eadu_contact = user.partner_id
-        if not user.is_eadu_user:
+        if not user.has_group('eadu.group_portal_eadu'):
             raise
         if not eadu_contact:
             raise

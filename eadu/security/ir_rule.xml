@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <data>
+        <record id="eadu_rule_portal_discuss_channel" model="ir.rule">
+            <field name="name">Eadu access via partner mapping (discuss.channel)</field>
+            <field name="model_id" ref="mail.model_discuss_channel"/>
+            <field name="domain_force">[('id','in', user.env['eadu.partner.any'].search([('partner_id', '=', user.partner_id.id), ('res_model', '=', 'discuss.channel')]).mapped('res_id'))] or []</field>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="True"/>
+            <field name="perm_unlink" eval="False"/>
+            <field name="groups" eval="[(6, 0, [ref('eadu.group_portal_eadu')])]"/>
+        </record>
+
+        <record id="eadu_rule_portal_mail_message" model="ir.rule">
+            <field name="name">Eadu access via partner mapping (mail.message)</field>
+            <field name="model_id" ref="mail.model_mail_message"/>
+            <field name="domain_force">[('id','in', user.env['eadu.partner.any'].search([('partner_id', '=', user.partner_id.id), ('res_model', '=', 'mail.message')]).mapped('res_id'))] or []</field>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+            <field name="groups" eval="[(6, 0, [ref('eadu.group_portal_eadu')])]"/>
+        </record>
+
+        <record id="eadu_rule_portal_ir_attachment" model="ir.rule">
+            <field name="name">Eadu access via partner mapping (ir.attachment)</field>
+            <field name="model_id" ref="base.model_ir_attachment"/>
+            <field name="domain_force">[('id','in', user.env['eadu.partner.any'].search([('partner_id', '=', user.partner_id.id), ('res_model', '=', 'ir.attachment')]).mapped('res_id'))] or []</field>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="True"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+            <field name="groups" eval="[(6, 0, [ref('eadu.group_portal_eadu')])]"/>
+        </record>
+
+        <!-- Portal Eadu users: can read only their own eadu.partner.any entries -->
+        <record id="eadu_rule_portal_eadu_partner_any" model="ir.rule">
+            <field name="name">Eadu Partner Any: own entries</field>
+            <field name="model_id" ref="eadu.model_eadu_partner_any"/>
+            <field name="domain_force">[('partner_id', '=', user.partner_id.id)]</field>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="False"/>
+            <field name="groups" eval="[(6, 0, [ref('eadu.group_portal_eadu')])]"/>
+        </record>
+    </data>
+</odoo>

@@ -12,8 +12,11 @@ On the partner fill in his URL and your id in his db.
         'mail',
     ],
     'data': [
+        'security/groups.xml',
+        'security/ir.model.access.csv',
         'data/ir_cron.xml',
         'views/res_partner_views.xml',
+        'security/ir_rule.xml',
     ],
     'demo': [
     ],

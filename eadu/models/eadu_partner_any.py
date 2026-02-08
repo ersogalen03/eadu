@@ -7,9 +7,9 @@ class EaduPartnerAny(models.Model):
     _name = "eadu.partner.any"
     _description = "Link between Eadu Partners and other objects in order to know which object has which ID in which db.  Users in this db are however partners in the other db (a partner_id away)"
     # TODO: is it still a good idea that users are linked to partners.  We could also link partners to partners, which makes that you can also do that for partners already linked to another db
-    partner_id = fields.Many2one('res.partner', 'Eadu Contact', help="The Eadu contact that represents the other DB") 
-    res_model = fields.Char('Resource Model')
-    res_id = fields.Integer('Resource ID')
+    partner_id = fields.Many2one('res.partner', 'Eadu Contact', index=True, help="The Eadu contact that represents the other DB") 
+    res_model = fields.Char('Resource Model', index=True)
+    res_id = fields.Integer('Resource ID', index=True)
     eadu_ident = fields.Integer('Eadu Identification')
     to_sync = fields.Boolean('To Sync')
 
