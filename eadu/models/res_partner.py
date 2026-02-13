@@ -54,7 +54,7 @@ class ResPartner(models.Model):
                 })
             eadu_user = self.env['res.users'].search([
                 ('partner_id', '=', eadu_contact.id),
-                ('groups_id', 'in', self.env.ref('eadu.group_portal_eadu').id)
+                ('group_ids', 'in', [self.env.ref('eadu.group_portal_eadu').id]),
             ])
             if not eadu_user:        
                 eadu_user = self.env['res.users'].create({
@@ -196,7 +196,6 @@ class ResPartner(models.Model):
         partner_ids = self.env['eadu.partner.any'].sudo().search([('res_model', '=', 'res.partner')]).mapped('res_id')
         partners = self.browse(partner_ids)
         partners = partners.filtered(lambda p: not p.user_ids)
-        import pdb; pdb.set_trace()
 
         channel = self.env["discuss.channel"]
         if channel_id:

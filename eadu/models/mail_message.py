@@ -16,52 +16,72 @@ class MailMessage(models.Model):
         if model == 'discuss.channel':
             channel = self.env['discuss.channel'].browse(res_id)
             partners = channel.channel_partner_ids
-            result_partners = []
             eadu_partners = self.env['res.partner']
             for partner in partners:
                 if eadu_p := partner._get_eadu_partner():
                     eadu_partners |= eadu_p
+            
+            # Support multiple EADU partners: build one payload per partner
+            if eadu_partners:
+                results = []
+                for eadu_partner in eadu_partners:
+                    # Ensure the current author exists remotely for this partner
+                    epu = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                        eadu_partner, 'res.partner', self.env.user.partner_id.id
+                    )
+                    if not epu:
+                        author_create_res = eadu_partner.sudo()._eadu_call(
+                            'res.partner',
+                            'action_eadu_create_contact',
+                            {
+                                'name': self.env.user.name,
+                                'email': self.env.user.email,
+                                'eadu_ident': self.env.user.partner_id.id,
+                            }
+                        )
+                        if author_create_res:
+                            epu = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                                eadu_partner, 'res.partner', self.env.user.partner_id.id, author_create_res['result']
+                            )
 
-            if len(eadu_partners) == 1:
-                epu = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'res.partner', self.env.user.partner_id.id)
-                # There should be an epu?
-                if not epu:
-                    result = eadu_partners.sudo()._eadu_call(
-                        'res.partner',
-                        'action_eadu_create_contact',
-                        {
-                            'name': self.env.user.name,
-                            'email': self.env.user.email,
-                            'eadu_ident': self.env.user.partner_id.id,
-                        }
+                    # Map channel members for this partner
+                    result_partners = []
+                    for p in partners:
+                        if epa := self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                            eadu_partner, 'res.partner', p.id
+                        ):
+                            result_partners.append(epa.eadu_ident)
+
+                    # Get or create remote channel for this partner
+                    channel_link = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                        eadu_partner, 'discuss.channel', channel.id
                     )
-                    if result:
-                        epu = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_partners, 'res.partner', self.env.user.partner_id.id, result['result'])
-                result_partners = []
-                for partner in partners:
-                    if epa := self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'res.partner', partner.id):
-                        result_partners.append(epa.eadu_ident)
-                channel_eadu_ident = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partners, 'discuss.channel', channel.id).eadu_ident
-                if not channel_eadu_ident:
-                    result = eadu_partners.sudo()._eadu_call(
-                        'discuss.channel',
-                        'action_eadu_channel_create', 
-                        {
-                            'name': channel.name,
-                            'eadu_ident': channel.id,
-                            'partner_ids': result_partners,
-                        },                     
-                    )
-                    if result:
-                        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_partners, 'discuss.channel', channel.id, result['channel_id'])
-                        channel_eadu_ident = result['channel_id']
-                result = {
-                    'model': 'discuss.channel',
-                    'res_id': channel_eadu_ident,
-                    'body': body,
-                    'partner_id': epu.eadu_ident,
-                }
-                return eadu_partners, result
+                    channel_eadu_ident = channel_link.eadu_ident if channel_link else False
+                    if not channel_eadu_ident:
+                        chan_create_res = eadu_partner.sudo()._eadu_call(
+                            'discuss.channel',
+                            'action_eadu_channel_create', 
+                            {
+                                'name': channel.name,
+                                'eadu_ident': channel.id,
+                                'partner_ids': result_partners,
+                            },                     
+                        )
+                        if chan_create_res:
+                            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                                eadu_partner, 'discuss.channel', channel.id, chan_create_res['channel_id']
+                            )
+                            channel_eadu_ident = chan_create_res['channel_id']
+
+                    payload = {
+                        'model': 'discuss.channel',
+                        'res_id': channel_eadu_ident,
+                        'body': body,
+                        'partner_id': epu.eadu_ident if epu else False,
+                    }
+                    results.append({'partner': eadu_partner, 'payload': payload})
+
+                return eadu_partners, results
 
         if match:= re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
             partner = self.env['res.partner'].browse(int(match.group(1)))
@@ -90,41 +110,59 @@ class MailMessage(models.Model):
             res_id = val.get('res_id')
             result = False
             if body and model and res_id:
-                partner, result = self._handle_eadu_msg(model, res_id, body)
-                if result and partner:
-                    result['eadu_ident'] = created_record.id
-                    # Pre-create remote attachments unattached and collect their remote IDs
-                    remote_attachment_ids = []
-                    for att in created_record.attachment_ids.sudo():
-                        payload = {
-                            'name': att.name,
-                            'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
-                            'mimetype': att.mimetype,
-                            'res_model': None,
-                            'res_id': None,
-                            'eadu_ident': att.id,
-                        }
+                partner_group, result = self._handle_eadu_msg(model, res_id, body)
+                if result and partner_group:
+                    # Normalize results to a list of {'partner': <res.partner>, 'payload': {...}}
+                    results_list = result if isinstance(result, list) else [{'partner': partner_group, 'payload': result}]
+                    for item in results_list:
+                        eadu_partner = item['partner']
+                        payload = dict(item['payload'])
+                        payload['eadu_ident'] = created_record.id
+
+                        # Collect remote attachment ids for this specific partner
+                        remote_attachment_ids = []
+                        for att in created_record.attachment_ids.sudo():
+                            # Reuse existing mapping if available
+                            existing = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                                eadu_partner, 'ir.attachment', att.id
+                            )
+                            if existing:
+                                remote_attachment_ids.append(existing.eadu_ident)
+                                continue
+                            att_payload = {
+                                'name': att.name,
+                                'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
+                                'mimetype': att.mimetype,
+                                'res_model': None,
+                                'res_id': None,
+                                'eadu_ident': att.id,
+                            }
+                            try:
+                                a_res = eadu_partner.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', att_payload)
+                                if a_res and 'attachment_id' in a_res:
+                                    remote_attachment_ids.append(a_res['attachment_id'])
+                                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                                        eadu_partner, 'ir.attachment', att.id, a_res['attachment_id']
+                                    )
+                            except Exception:
+                                # continue even if one attachment fails
+                                pass
+
+                        # Create the remote message for this partner
+                        payload['attachment_ids'] = remote_attachment_ids
                         try:
-                            a_res = partner.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', payload)
-                            if a_res and 'attachment_id' in a_res:
-                                remote_attachment_ids.append(a_res['attachment_id'])
+                            res = eadu_partner._eadu_call(
+                                'mail.message',
+                                'action_eadu_receive', 
+                                payload, 
+                            )
+                            if res and 'message_id' in res:
                                 self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                    partner, 'ir.attachment', att.id, a_res['attachment_id']
+                                    eadu_partner, 'mail.message', created_record.id, res['message_id']
                                 )
                         except Exception:
-                            # continue even if one attachment fails
+                            # Don't block local creation if remote fails for one partner
                             pass
-
-                    # Create the remote message, passing collected remote attachment ids
-                    result_with_atts = dict(result)
-                    result_with_atts['attachment_ids'] = remote_attachment_ids
-                    res = partner._eadu_call(
-                        'mail.message',
-                        'action_eadu_receive', 
-                        result_with_atts, 
-                    )
-                    if res and 'message_id' in res:
-                        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(partner, 'mail.message', created_record.id, res['message_id'])
 
             recs += created_record
         return recs
@@ -165,35 +203,35 @@ class MailMessage(models.Model):
         res = super().write(vals)
         if not self.env.context.get('eadu_message'):
             for message in self:
-                print('sync with others', message.id)
-                # If this is a discuss.channel message and attachments were updated, ensure remote linkage
-                if message.model == 'discuss.channel' and ('attachment_ids' in vals or message.attachment_ids):
-                    # For each remote partner mapping of this message, push new attachments and link to remote message
-                    eadu_anys = self.env['eadu.partner.any'].sudo().search([
-                        ('res_model', '=', 'mail.message'), ('res_id', '=', message.id)
-                    ])
-                    for eadu_any in eadu_anys:
-                        for att in message.attachment_ids.sudo():
-                            # Skip if this attachment already mapped for this partner
-                            remote_att = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_any.partner_id, 'ir.attachment', att.id)
-                            if remote_att:
-                                continue
-                            payload = {
-                                'name': att.name,
-                                'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
-                                'mimetype': att.mimetype,
-                                'res_model': 'mail.message',
-                                'res_id': eadu_any.eadu_ident,
-                                'eadu_ident': att.id,
-                            }
-                            try:
-                                a_res = eadu_any.partner_id.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', payload)
-                                if a_res and 'attachment_id' in a_res:
-                                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                        eadu_any.partner_id, 'ir.attachment', att.id, a_res['attachment_id']
-                                    )
-                            except Exception:
-                                pass
+                # print('sync with others', message.id)
+                # # If this is a discuss.channel message and attachments were updated, ensure remote linkage
+                # if message.model == 'discuss.channel' and ('attachment_ids' in vals or message.attachment_ids):
+                #     # For each remote partner mapping of this message, push new attachments and link to remote message
+                #     eadu_anys = self.env['eadu.partner.any'].sudo().search([
+                #         ('res_model', '=', 'mail.message'), ('res_id', '=', message.id)
+                #     ])
+                #     for eadu_any in eadu_anys:
+                #         for att in message.attachment_ids.sudo():
+                #             # Skip if this attachment already mapped for this partner
+                #             remote_att = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_any.partner_id, 'ir.attachment', att.id)
+                #             if remote_att:
+                #                 continue
+                #             payload = {
+                #                 'name': att.name,
+                #                 'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
+                #                 'mimetype': att.mimetype,
+                #                 'res_model': 'mail.message',
+                #                 'res_id': eadu_any.eadu_ident,
+                #                 'eadu_ident': att.id,
+                #             }
+                #             try:
+                #                 a_res = eadu_any.partner_id.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', payload)
+                #                 if a_res and 'attachment_id' in a_res:
+                #                     self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                #                         eadu_any.partner_id, 'ir.attachment', att.id, a_res['attachment_id']
+                #                     )
+                #             except Exception:
+                #                 pass
 
                 self.env['eadu.partner.any'].sudo()._sync_with_others('mail.message', message.id, vals)
         return res
