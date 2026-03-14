@@ -42,6 +42,8 @@ class ResPartner(models.Model):
 
     def _create_update_eadu_child_partner(self):
         partner = self.commercial_partner_id
+        partner_company_id = partner.company_id.id
+        user_company_ids = [partner_company_id] if partner_company_id else self.env['res.company'].sudo().search([]).ids
         eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_url)
         if not eadu_contact:
             eadu_contact = self.env['res.partner'].search([('name', '=', "EADU" + partner.name), ('parent_id', '=', partner.id)], limit=1)
@@ -51,6 +53,7 @@ class ResPartner(models.Model):
                     'parent_id': partner.id,
                     'company_type': 'person',
                     'type': 'other', 
+                    'company_id': partner.company_id, # False or not
                 })
             eadu_user = self.env['res.users'].search([
                 ('partner_id', '=', eadu_contact.id),
@@ -61,6 +64,8 @@ class ResPartner(models.Model):
                     'partner_id': eadu_contact.id,
                     'login': "EADU" + self.name.strip().strip('#'),
                     'group_ids': [Command.link(self.env.ref('eadu.group_portal_eadu').id)],
+                    'company_id': partner_company_id,
+                    'company_ids': [Command.set(user_company_ids)],
                 })
         return eadu_contact
  
@@ -83,6 +88,7 @@ class ResPartner(models.Model):
         """
         self.ensure_one()
         partner = self.commercial_partner_id
+        partner_company_id = partner.company_id.id
         child_partner = partner.child_ids.filtered(lambda p: p.name == name)
         eadu_rec = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(self, 'res.partner', child_partner.id)
         if eadu_rec:
@@ -96,6 +102,7 @@ class ResPartner(models.Model):
                 'parent_id': partner.id,
                 'company_type': 'person',
                 'type': 'contact', 
+                'company_id': partner_company_id,
             })
             self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
         return child_partner
