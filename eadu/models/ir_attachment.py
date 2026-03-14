@@ -99,6 +99,6 @@ class IrAttachment(models.Model):
         # and linked from the mail.message creation flow for better UX.
 
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-            eadu_contact, 'ir.attachment', att.id, eadu_ident
+            eadu_contact, 'ir.attachment', att.id, eadu_ident, partner_master=True
         )
         return {'attachment_id': att.id}

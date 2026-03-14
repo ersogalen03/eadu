@@ -83,7 +83,8 @@ class MailMessageReaction(models.Model):
         })
 
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-            eadu_contact, 'mail.message.reaction', reaction.id, eadu_ident
+            eadu_contact, 'mail.message.reaction', reaction.id, eadu_ident,
+            partner_master=True,
         )
         return {'reaction_id': reaction.id}
 

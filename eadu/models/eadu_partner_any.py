@@ -6,12 +6,14 @@ from odoo import api, fields, models
 class EaduPartnerAny(models.Model):
     _name = "eadu.partner.any"
     _description = "Link between Eadu Partners and other objects in order to know which object has which ID in which db.  Users in this db are however partners in the other db (a partner_id away)"
-    # TODO: is it still a good idea that users are linked to partners.  We could also link partners to partners, which makes that you can also do that for partners already linked to another db
+
     partner_id = fields.Many2one('res.partner', 'Eadu Contact', index=True, help="The Eadu contact that represents the other DB") 
     res_model = fields.Char('Resource Model', index=True)
     res_id = fields.Integer('Resource ID', index=True)
     eadu_ident = fields.Integer('Eadu Identification')
     to_sync = fields.Boolean('To Sync')
+    master_status = fields.Selection([('partner', 'Partner Is Master'), 
+                                      ('me', 'I Am Master')], string='Master Status')
 
     def _get_record(self):
         self.ensure_one()
@@ -21,19 +23,21 @@ class EaduPartnerAny(models.Model):
         return self.search([
             ('partner_id', '=', eadu_partner.id),
             ('res_model', '=', res_model),
-            ('res_id', '=', res_id)
+            ('res_id', '=', res_id),
         ])
 
-    def _search_create_for_eadu_partner(self, eadu_partner, res_model, res_id, eadu_ident):
+    def _search_create_for_eadu_partner(self, eadu_partner, res_model, res_id, eadu_ident, partner_master=False):
         record = self._search_for_eadu_partner(eadu_partner, res_model, res_id)
         if not record:
             record = self.create({
                 'partner_id': eadu_partner.id,
                 'res_model': res_model,
                 'res_id': res_id,
-                'eadu_ident': eadu_ident
+                'eadu_ident': eadu_ident,
+                'master_status': 'partner' if partner_master else 'me',
             })
         else:
+            record.master_status = 'partner' if partner_master else 'me'
             record.eadu_ident = eadu_ident
         return record
     
@@ -45,7 +49,7 @@ class EaduPartnerAny(models.Model):
             'ir.attachment': ['name', 'mimetype', 'datas', 'res_model', 'res_id'],
             'mail.message.reaction': ['content'],
         }
-
+                
     def _sync_with_others(self, res_model, res_id, vals):
         eadu_anys = self.search([('res_model', '=', res_model), ('res_id', '=', res_id)]) 
         if eadu_anys and vals.keys() & set(self._model_fields_mapping().get(res_model, [])):

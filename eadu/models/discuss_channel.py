@@ -7,8 +7,7 @@ class DiscussChannel(models.Model):
     _inherit = "discuss.channel"
 
 
-
-    def action_eadu_channel_create(self, name, eadu_ident, partner_ids):
+    def action_eadu_channel_create(self, name, eadu_ident, partner_ids, channel_type="chat"):
         """
         Create a new mail.channel with the given name and partners.
         partner_ids: list of res.partner IDs to add to the channel (required).
@@ -31,9 +30,15 @@ class DiscussChannel(models.Model):
         vals = {
             'name': name,
             'channel_partner_ids': [(4, x) for x in partner_ids],
-            'channel_type': 'chat',
+            'channel_type': channel_type,
         }
         channel = self.env['discuss.channel'].with_user(puser).sudo().create(vals)
         print(channel, channel.id)
-        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(user.partner_id, 'discuss.channel', channel.id, eadu_ident)
+        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+            user.partner_id, 
+            'discuss.channel', 
+            channel.id, 
+            eadu_ident, 
+            partner_master=True, # The creator of the channel is considered the master for this record
+        )
         return {'channel_id': channel.id}

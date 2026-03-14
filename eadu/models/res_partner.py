@@ -162,13 +162,32 @@ class ResPartner(models.Model):
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'res.partner', ypartner, ypartnereadu)
         return {'result': ypartnerreturn.id}
 
-    def action_eadu_create_contact(self, eadu_ident, name, email):
+    def action_eadu_create_contact(self, eadu_ident, name, email, eadu_url=None, eadu_url_ident=None):
         eadu_contact = self.env.user.partner_id
         if not eadu_contact.eadu_url:
             raise
+
+        # When eadu_url is provided, check if we already have a connection to that DB
+        # and whether the partner already exists (avoids duplicates for multi-DB channels)
+        if eadu_url and eadu_url_ident:
+            other_eadu_contact = self.env['res.partner'].sudo().search([
+                ('eadu_url', '=', eadu_url),
+            ], limit=1)
+            if other_eadu_contact:
+                epa = self.env['eadu.partner.any'].sudo().search([
+                    ('partner_id', '=', other_eadu_contact.id),
+                    ('res_model', '=', 'res.partner'), 
+                    ('eadu_ident', '=', eadu_url_ident),
+                ], limit=1)
+                if epa:
+                    #epa._get_record().email = email
+                    epa._search_create_for_eadu_partner(eadu_contact, 'res.partner', epa.res_id, eadu_ident, is_master=True)
+                    return {'result': epa.res_id}
+
+                
         partner = eadu_contact._create_child_contact(name, eadu_ident)
         partner.email = email
-        return {'result': partner.id}      
+        return {'result': partner.id}
 
     def _eadu_call(self, model, method, params):
         """
