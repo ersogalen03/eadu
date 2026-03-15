@@ -53,7 +53,7 @@ class ResPartner(models.Model):
                     'parent_id': partner.id,
                     'company_type': 'person',
                     'type': 'other', 
-                    'company_id': partner.company_id, # False or not
+                    'company_id': partner_company_id,
                 })
             eadu_user = self.env['res.users'].search([
                 ('partner_id', '=', eadu_contact.id),
@@ -107,8 +107,8 @@ class ResPartner(models.Model):
             self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.partner', child_partner.id, eadu_ident)
         return child_partner
 
-
-    def button_generate_eadu_exchange(self):
+    def _generate_eadu_exchange(self):
+        """ Generate an exchange token for linking 2 companies"""        
         self.ensure_one()
         # Check if there is a child partner which is linked to an is_eadu user
         eadu_contact = self._create_update_eadu_child_partner()
@@ -116,11 +116,16 @@ class ResPartner(models.Model):
 
         web_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         dbname = self._get_db_name()
-        self.env.cr.commit()
         cuser = self.env.user # To already create yourself in the other db (if you have not been already)
+        return base64.b64encode('#'.join([web_url, api_key, dbname, cuser.name, str(cuser.partner_id.id)]).encode()).decode()
+
+    def button_generate_eadu_exchange(self):
+        exch = self._generate_eadu_exchange()
+        self.env.cr.commit()
+
         raise odoo.exceptions.UserError(
             _("Copy/paste and tell your contact to use the following code on the partner form of you in his Odoo instance:") + "\n" 
-            + base64.b64encode('#'.join([web_url, api_key, dbname, cuser.name, str(cuser.partner_id.id)]).encode()).decode()
+            + exch
         )
 
     def button_process_eadu_exchanged(self):
@@ -166,7 +171,7 @@ class ResPartner(models.Model):
         # can already talk to each other
         ypartnerreturn = eadu_contact.sudo()._create_child_contact(cusername, int(cpartnereadu))
         ypartner = self.env['res.partner'].sudo().browse(int(ypartnerid))
-        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'res.partner', ypartner, ypartnereadu)
+        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'res.partner', ypartner.id, ypartnereadu)
         return {'result': ypartnerreturn.id}
 
     def action_eadu_create_contact(self, eadu_ident, name, email, eadu_url=None, eadu_url_ident=None):
@@ -188,7 +193,7 @@ class ResPartner(models.Model):
                 ], limit=1)
                 if epa:
                     #epa._get_record().email = email
-                    epa._search_create_for_eadu_partner(eadu_contact, 'res.partner', epa.res_id, eadu_ident, is_master=True)
+                    epa._search_create_for_eadu_partner(eadu_contact, 'res.partner', epa.res_id, eadu_ident, partner_master=True)
                     return {'result': epa.res_id}
 
                 

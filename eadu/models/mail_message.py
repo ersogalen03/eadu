@@ -253,40 +253,52 @@ class MailMessage(models.Model):
 
         partner_master = True
         if model == 'discuss.channel':
-            # Search in eadu.partner.any for an existing link for this channel to determine master status
-            already_linked = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
-                eadu_contact, 'discuss.channel', res_id
-            )
+            # Determine ownership at channel level. In relay scenarios, the
+            # current eadu_contact may differ from the mapping partner_id.
+            already_linked = self.env['eadu.partner.any'].sudo().search([
+                ('res_model', '=', 'discuss.channel'),
+                ('res_id', '=', res_id),
+            ])
             if already_linked.filtered(lambda a: a.master_status == 'me'):
                 partner_master = False
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'mail.message', message.id, eadu_ident, partner_master=partner_master)
         if not partner_master:
-            # It means I am the master an need to send it to the other members in the channel
+            # It means I am the master and need to send it to other EADU endpoints in the channel.
             channel = self.env['discuss.channel'].browse(res_id)
             partners = channel.channel_partner_ids
             for partner in partners:
-                if partner._get_eadu_partner() and partner._get_eadu_partner() != eadu_contact:
-                    epa = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                        partner._get_eadu_partner(), 'mail.message', message.id, eadu_ident, partner_master=False
+                eadu_partner_upd = partner._get_eadu_partner()
+                if not eadu_partner_upd or eadu_partner_upd == eadu_contact:
+                    continue
+
+                existing_msg_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                    eadu_partner_upd, 'mail.message', message.id
+                )
+                if existing_msg_map:
+                    continue
+
+                # Find channel and partner mapping for this remote endpoint.
+                channel_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                    eadu_partner_upd, model, res_id
+                )
+                partner_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                    eadu_partner_upd, 'res.partner', partner.id
+                )
+                if not channel_map or not partner_map:
+                    continue
+
+                result = eadu_partner_upd.sudo()._eadu_call('mail.message', 'action_eadu_receive', {
+                    'model': model,
+                    'res_id': channel_map.eadu_ident,
+                    'body': body,
+                    'partner_id': partner_map.eadu_ident,
+                    'eadu_ident': message.id,
+                })
+                if result and result.get('message_id'):
+                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                        eadu_partner_upd, 'mail.message', message.id, result['message_id'],
+                        partner_master=False
                     )
-                    if not epa:
-                        eadu_partner_upd = partner._get_eadu_partner()
-                        # Find model and res_id of this message for this partner:
-                        epa = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partner_upd, model, res_id)
-                        epa_partner = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_partner_upd, 'res.partner', partner.id)
-
-                        
-                        result = eadu_partner_upd.sudo()._eadu_call('mail.message', 'action_eadu_receive', {
-                            'model': model,
-                            'res_id': epa.eadu_ident,
-                            'body': body,
-                            'partner_id': epa_partner.eadu_ident,
-                            'eadu_ident': message.id,
-                        })
-                        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                            eadu_partner_upd, 'mail.message', message.id, result['message_id'],
-                            partner_master=False)
-
 
 
 
