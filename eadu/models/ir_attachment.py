@@ -61,7 +61,7 @@ class IrAttachment(models.Model):
                 if 'res_model' in vals and vals['res_model'] in {'mail.message'}:
                     att._eadu_sync_created_or_updated(vals)
                 # Existing cross-partner sync
-                self.env['eadu.partner.any'].sudo()._sync_with_others('ir.attachment', att.id, vals)
+                #self.env['eadu.partner.any'].sudo()._sync_with_others('ir.attachment', att.id, vals)
         return res
 
     # Remote entry point to create attachment

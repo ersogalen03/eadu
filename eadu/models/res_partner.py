@@ -43,7 +43,8 @@ class ResPartner(models.Model):
     def _create_update_eadu_child_partner(self):
         partner = self.commercial_partner_id
         partner_company_id = partner.company_id.id
-        user_company_ids = [partner_company_id] if partner_company_id else self.env['res.company'].sudo().search([]).ids
+        user_company_id = partner_company_id or self.env.company.id
+        user_company_ids = [user_company_id]
         eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_url)
         if not eadu_contact:
             eadu_contact = self.env['res.partner'].search([('name', '=', "EADU" + partner.name), ('parent_id', '=', partner.id)], limit=1)
@@ -64,7 +65,7 @@ class ResPartner(models.Model):
                     'partner_id': eadu_contact.id,
                     'login': "EADU" + self.name.strip().strip('#'),
                     'group_ids': [Command.link(self.env.ref('eadu.group_portal_eadu').id)],
-                    'company_id': partner_company_id,
+                    'company_id': user_company_id,
                     'company_ids': [Command.set(user_company_ids)],
                 })
         return eadu_contact
@@ -239,8 +240,8 @@ class ResPartner(models.Model):
             "partner_ids": partner_ids,
         }
     
-    def write(self, vals):
-        res = super().write(vals)
-        for partner in self:
-            self.env['eadu.partner.any'].sudo()._sync_with_others('res.partner', partner.id, vals)
-        return res
+    # def write(self, vals):
+    #     res = super().write(vals)
+    #     for partner in self:
+    #         self.env['eadu.partner.any'].sudo()._sync_with_others('res.partner', partner.id, vals)
+    #     return res

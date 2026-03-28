@@ -68,32 +68,26 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self._eadu_call_patcher.start()
         self.addCleanup(self._eadu_call_patcher.stop)
 
-        # In local multi-company tests, route mocked RPC calls by source company partner.
-        self._counterpart_by_partner_id = {
-            self.partner_a.id: self.partner_b,
-            self.partner_b.id: self.partner_a,
-        }
+    def _get_eadu_portal_user_from_apikey(self, eadu_contact):
+        if not eadu_contact.eadu_apikey:
+            raise AssertionError("Missing eadu_apikey for mocked _eadu_call")
 
-    def _get_counterpart_partner(self, eadu_contact):
-        source_partner = eadu_contact.parent_id
-        if source_partner.id in self._counterpart_by_partner_id:
-            return self._counterpart_by_partner_id[source_partner.id]
-        raise AssertionError("Unsupported partner mapping for mocked _eadu_call")
+        user_id = self.env["res.users.apikeys"].sudo()._check_credentials(
+            scope="rpc",
+            key=eadu_contact.eadu_apikey,
+        )
+        if not user_id:
+            raise AssertionError("No user found for eadu_apikey in mocked _eadu_call")
 
-    def _get_counterpart_eadu_user(self, counterpart_partner):
-        counterpart_eadu_contact = counterpart_partner._create_update_eadu_child_partner()
-        eadu_user = counterpart_eadu_contact.user_ids.filtered(
-            lambda u: u.has_group("eadu.group_portal_eadu")
-        )[:1]
-        if not eadu_user:
-            raise AssertionError("Missing counterpart EADU portal user for mocked _eadu_call")
+        eadu_user = self.ResUsers.browse(user_id)
+        if not eadu_user.has_group("eadu.group_portal_eadu"):
+            raise AssertionError("Resolved user is not in eadu.group_portal_eadu")
         return eadu_user
 
     def _local_cross_company_call(self, eadu_contact, model, method, params):
-        """Route cross-db RPC calls locally to the counterpart company as EADU user."""
-        counterpart_partner = self._get_counterpart_partner(eadu_contact)
-        counterpart_user = self._get_counterpart_eadu_user(counterpart_partner)
-        remote_model = self.env[model].with_user(counterpart_user)
+        """Route cross-db RPC calls locally using the user identified by eadu_apikey."""
+        remote_user = self._get_eadu_portal_user_from_apikey(eadu_contact)
+        remote_model = self.env[model].with_user(remote_user)
         return getattr(remote_model, method)(**params)
 
     def test_exchange_token_flow_via_multicompany(self):
@@ -276,13 +270,6 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             }
         )
 
-        # Extend mocked RPC routing for C <-> A exchanges.
-        self._counterpart_by_partner_id.update(
-            {
-                partner_c.id: self.partner_a,
-            }
-        )
-
         # First exchange A <-> B.
         exchange_token_ab = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
         self.partner_b.with_user(self.user_b).write({"eadu_exchanged": exchange_token_ab})
@@ -303,15 +290,6 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         )[:1]
         self.assertTrue(alice_contact_b, "Expected exchanged Alice contact under company B")
         self.assertTrue(alice_contact_c, "Expected exchanged Alice contact under company C")
-
-        # After exchanges are complete, route message RPC calls to B/C respectively.
-        # This simulates remote DB targets inside the single-db mocked environment.
-        self._counterpart_by_partner_id.update(
-            {
-                self.partner_b.id: self.partner_b,
-                partner_c.id: partner_c,
-            }
-        )
 
         # Company A sends one message to a channel involving A/B/C participants.
         channel_name = "EADU Three Companies Channel"
@@ -397,6 +375,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             ],
             limit=1,
         )
+        import pdb; pdb.set_trace() 
         self.assertTrue(mapping_b_to_a, "Missing B->A discuss.channel mapping")
         self.assertTrue(mapping_c_to_a, "Missing C->A discuss.channel mapping")
         self.assertEqual(mapping_b_to_a.master_status, "partner")
@@ -405,14 +384,6 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertEqual(mapping_c_to_a.eadu_ident, channel_a.id)
 
         # Post from company C mirror and ensure fan-out to all channel copies.
-        # Route C calls to A so A acts as relay toward B in this mocked setup.
-        self._counterpart_by_partner_id.update(
-            {
-                partner_c.id: self.partner_a,
-                self.partner_a.id: self.partner_a,
-                self.partner_b.id: self.partner_b,
-            }
-        )
         # In this mocked single-db setup, mirrored channels may only have EADU
         # portal users as effective senders. Prefer C's EADU user and fallback
         # to any channel member user if needed.

@@ -264,7 +264,7 @@ class MailMessage(models.Model):
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'mail.message', message.id, eadu_ident, partner_master=partner_master)
         if not partner_master:
             # It means I am the master and need to send it to other EADU endpoints in the channel.
-            channel = self.env['discuss.channel'].browse(res_id)
+            channel = self.env['discuss.channel'].browse(res_id).sudo()
             partners = channel.channel_partner_ids
             for partner in partners:
                 eadu_partner_upd = partner._get_eadu_partner()
@@ -337,6 +337,7 @@ class MailMessage(models.Model):
                 #                     )
                 #             except Exception:
                 #                 pass
-
-                self.env['eadu.partner.any'].sudo()._sync_with_others('mail.message', message.id, vals)
+                #import pdb; pdb.set_trace()
+                #self.env['eadu.partner.any'].sudo()._sync_with_others('mail.message', message.id, vals)
+                pass
         return res
