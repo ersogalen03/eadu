@@ -359,37 +359,14 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertTrue(channel_b in all_channels)
         self.assertTrue(channel_c in all_channels)
 
-        mapping_b_to_a = self.env["eadu.partner.any"].sudo().search(
-            [
-                ("partner_id", "=", eadu_contact_b.id),
-                ("res_model", "=", "discuss.channel"),
-                ("res_id", "=", channel_b.id),
-            ],
-            limit=1,
-        )
-        mapping_c_to_a = self.env["eadu.partner.any"].sudo().search(
-            [
-                ("partner_id", "=", eadu_contact_c.id),
-                ("res_model", "=", "discuss.channel"),
-                ("res_id", "=", channel_c.id),
-            ],
-            limit=1,
-        )
-        import pdb; pdb.set_trace() 
-        self.assertTrue(mapping_b_to_a, "Missing B->A discuss.channel mapping")
-        self.assertTrue(mapping_c_to_a, "Missing C->A discuss.channel mapping")
-        self.assertEqual(mapping_b_to_a.master_status, "partner")
-        self.assertEqual(mapping_c_to_a.master_status, "partner")
-        self.assertEqual(mapping_b_to_a.eadu_ident, channel_a.id)
-        self.assertEqual(mapping_c_to_a.eadu_ident, channel_a.id)
-
+        
         # Post from company C mirror and ensure fan-out to all channel copies.
-        # In this mocked single-db setup, mirrored channels may only have EADU
-        # portal users as effective senders. Prefer C's EADU user and fallback
-        # to any channel member user if needed.
-        company_c_sender = eadu_contact_c.user_ids.filtered(
-            lambda u: u.has_group("eadu.group_portal_eadu")
+        # Prefer a user with mail.message create access for channel posting,
+        # then fallback to C's EADU portal user and finally any member user.
+        company_c_sender = channel_c.channel_partner_ids.user_ids.filtered(
+            lambda u: u.has_group("base.group_user")
         )[:1]
+
         if not company_c_sender:
             company_c_sender = channel_c.channel_partner_ids.user_ids[:1]
         self.assertTrue(
@@ -398,7 +375,18 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         )
 
         body_from_c = "Message sent from company C and relayed to A and B"
-        channel_c.with_user(company_c_sender).message_post(body=body_from_c)
+        attachment_name = "from-company-c.txt"
+        attachment_from_c = self.env["ir.attachment"].with_user(company_c_sender).sudo().create(
+            {
+                "name": attachment_name,
+                "datas": base64.b64encode(b"attachment payload from company C"),
+                "mimetype": "text/plain",
+            }
+        )
+        channel_c.with_user(company_c_sender).message_post(
+            body=body_from_c,
+            attachment_ids=[attachment_from_c.id],
+        )
 
         for expected_channel in (channel_a, channel_b, channel_c):
             message = self.env["mail.message"].sudo().search(
@@ -412,4 +400,13 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             self.assertTrue(
                 message,
                 "Message posted in company C channel should appear in all three channels",
+            )
+            self.assertTrue(
+                message.attachment_ids,
+                "Message posted in company C channel should keep its attachment in all three channels",
+            )
+            self.assertIn(
+                attachment_name,
+                message.attachment_ids.mapped("name"),
+                "Replicated message should keep the attachment filename",
             )

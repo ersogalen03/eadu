@@ -2,6 +2,7 @@
 
 from markupsafe import Markup
 from odoo import api, fields, models
+from odoo.exceptions import AccessError
 
 import re
 
@@ -287,17 +288,47 @@ class MailMessage(models.Model):
                 if not channel_map or not partner_map:
                     continue
 
+                remote_attachment_ids = []
+                for att in message.attachment_ids.sudo():
+                    existing_att_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                        eadu_partner_upd, 'ir.attachment', att.id
+                    )
+                    if existing_att_map:
+                        remote_attachment_ids.append(existing_att_map.eadu_ident)
+                        continue
+
+                    att_payload = {
+                        'name': att.name,
+                        'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
+                        'mimetype': att.mimetype,
+                        'res_model': None,
+                        'res_id': None,
+                        'eadu_ident': att.id,
+                    }
+                    try:
+                        a_res = eadu_partner_upd.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', att_payload)
+                        if a_res and 'attachment_id' in a_res:
+                            remote_attachment_ids.append(a_res['attachment_id'])
+                            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                                eadu_partner_upd, 'ir.attachment', att.id, a_res['attachment_id'],
+                                partner_master=False
+                            )
+                    except Exception:
+                        pass
+
                 result = eadu_partner_upd.sudo()._eadu_call('mail.message', 'action_eadu_receive', {
                     'model': model,
                     'res_id': channel_map.eadu_ident,
                     'body': body,
                     'partner_id': partner_map.eadu_ident,
                     'eadu_ident': message.id,
+                    'attachment_ids': remote_attachment_ids,
                 })
                 if result and result.get('message_id'):
                     self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
                         eadu_partner_upd, 'mail.message', message.id, result['message_id'],
                         partner_master=False
+                        
                     )
 
 
