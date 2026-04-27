@@ -13,132 +13,55 @@ class MailMessage(models.Model):
         return model, res_id
 
     def _handle_eadu_msg(self, model, res_id, body):
-        result = {}
         if model == 'discuss.channel':
             channel = self.env['discuss.channel'].browse(res_id)
-            
             partners = channel.channel_partner_ids
+
             eadu_partners = self.env['res.partner']
             for partner in partners:
                 if eadu_p := partner._get_eadu_partner():
                     eadu_partners |= eadu_p
-            
-            # Support multiple EADU partners: build one payload per partner
-            if eadu_partners:
-                already_linked = self.env['eadu.partner.any'].sudo().search([
-                    ('res_model', '=', 'discuss.channel'), 
-                    ('res_id', '=', channel.id)], limit=1)
-                is_master = not already_linked
-                master = already_linked.filtered(lambda a: a.master_status == 'partner')
-                if master: # In case there is a master, you only send to him as he will forward it
-                    eadu_partners = master.partner_id
-                results = []
-                
-                for eadu_partner in eadu_partners:
-                    result_partners = []
-                    for partner in partners:
-                        partner_corresponding_eadu = partner._get_eadu_partner()
-                        if partner_corresponding_eadu == eadu_partner:
-                            continue
-                        
-                        other_eadu = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
-                            eadu_partner, 'res.partner', partner.id)
-                        if not other_eadu:
-                            params = {
-                                    'name': partner.name,
-                                    'email': partner.email,
-                                    'eadu_ident': partner.id,
-                                }
-                            if partner_corresponding_eadu:
-                                epp = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
-                                    partner_corresponding_eadu, 'res.partner', partner.id
-                                )
-                                if epp:
-                                    params['eadu_url_ident'] = epp.eadu_ident
-                                params['eadu_url'] = partner_corresponding_eadu.eadu_url
-                                    
-                            author_create_res = eadu_partner.sudo()._eadu_call(
-                                'res.partner',
-                                'action_eadu_create_contact',
-                                params
-                            )
 
-                            if author_create_res:
-                                epu = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                    eadu_partner, 'res.partner', partner.id, author_create_res['result'],
-                                    partner_master=False
-                                )
-                                other_eadu = author_create_res['result']
-                        if other_eadu:
-                            result_partners.append(other_eadu)
+            if not eadu_partners:
+                return False, False
 
+            # If there is a relay master, only send to that partner; it will forward.
+            already_linked = self.env['eadu.partner.any'].sudo().search([
+                ('res_model', '=', 'discuss.channel'),
+                ('res_id', '=', channel.id)], limit=1)
+            master = already_linked.filtered(lambda a: a.master_status == 'partner')
+            if master:
+                eadu_partners = master.partner_id
 
-                    # Ensure the current author exists remotely for this partner
-                    epu = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
-                        eadu_partner, 'res.partner', self.env.user.partner_id.id
-                    )
-                    eadu_url = None
-                    
-                    
-                    # Check if other partners have an URL that can be used to 
-                    if not epu:
-                        author_create_res = eadu_partner.sudo()._eadu_call(
-                            'res.partner',
-                            'action_eadu_create_contact',
-                            {
-                                'name': self.env.user.name,
-                                'email': self.env.user.email,
-                                'eadu_ident': self.env.user.partner_id.id,
-                            }
-                        )
-                        if author_create_res:
-                            epu = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                eadu_partner, 'res.partner', self.env.user.partner_id.id, author_create_res['result'],
-                                partner_master=False
-                            )
+            results = []
+            for eadu_partner in eadu_partners:
+                # 1. Ensure every channel member exists remotely.
+                for partner in partners:
+                    if partner._get_eadu_partner() == eadu_partner:
+                        continue
+                    partner._eadu_ensure_remote_partner(eadu_partner)
 
-                    # Map channel members for this partner
-                    result_partners = []
-                    for p in partners:
-                        if epa := self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
-                            eadu_partner, 'res.partner', p.id
-                        ):
-                            result_partners.append(epa.eadu_ident)
+                # 2. Ensure the message author exists remotely.
+                epu = self.env.user.partner_id._eadu_ensure_remote_partner(eadu_partner)
 
-                    # Get or create remote channel for this partner
-                    channel_link = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
-                        eadu_partner, 'discuss.channel', channel.id
-                    )
-                    channel_eadu_ident = channel_link.eadu_ident if channel_link else False
-                    if not channel_eadu_ident:
-                        chan_create_res = eadu_partner.sudo()._eadu_call(
-                            'discuss.channel',
-                            'action_eadu_channel_create', 
-                            {
-                                'name': channel.name,
-                                'eadu_ident': channel.id,
-                                'partner_ids': result_partners,
-                                'channel_type': channel.channel_type,
-                            },
-                        )
-                        if chan_create_res:
-                            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                eadu_partner, 'discuss.channel', channel.id, chan_create_res['channel_id'],
-                                partner_master=False
-                            )
-                            channel_eadu_ident = chan_create_res['channel_id']
+                # 3. Ensure the channel itself exists remotely (uses mappings from steps 1-2).
+                channel_eadu_ident = channel._eadu_ensure_remote_channel(eadu_partner)
+                if not channel_eadu_ident:
+                    continue
 
-                    payload = {
+                results.append({
+                    'partner': eadu_partner,
+                    'payload': {
                         'model': 'discuss.channel',
                         'res_id': channel_eadu_ident,
                         'body': body,
                         'partner_id': epu.eadu_ident if epu else False,
-                    }
-                    results.append({'partner': eadu_partner, 'payload': payload})
+                    },
+                })
 
-                return eadu_partners, results
+            return eadu_partners, results
 
-        if match:= re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
+        if match := re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
             partner = self.env['res.partner'].browse(int(match.group(1)))
             if eadu_contact := partner._get_eadu_partner():
                 model, res_id = self._convert_model(model, res_id)
@@ -150,7 +73,7 @@ class MailMessage(models.Model):
                     'body': body,
                     'partner_id': eup.eadu_ident,
                 }
-            return eadu_contact, result
+                return eadu_contact, result
         return False, False
 
     @api.model_create_multi

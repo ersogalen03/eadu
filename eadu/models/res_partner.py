@@ -240,6 +240,43 @@ class ResPartner(models.Model):
             "partner_ids": partner_ids,
         }
     
+    def _eadu_ensure_remote_partner(self, eadu_partner):
+        """Ensure this partner exists on the remote instance for eadu_partner.
+
+        Looks up an existing eadu.partner.any mapping first; only calls the
+        remote API when no mapping is found yet.  Returns the eadu.partner.any
+        record on success, or False when the remote call fails.
+        """
+        self.ensure_one()
+        EaduAny = self.env['eadu.partner.any'].sudo()
+        epu = EaduAny._search_for_eadu_partner(eadu_partner, 'res.partner', self.id)
+        if epu:
+            return epu
+
+        params = {
+            'name': self.name,
+            'email': self.email,
+            'eadu_ident': self.id,
+        }
+        # If this partner itself belongs to another EADU instance, pass the
+        # cross-reference so the remote can deduplicate.
+        partner_corresponding_eadu = self._get_eadu_partner()
+        if partner_corresponding_eadu:
+            epp = EaduAny._search_for_eadu_partner(
+                partner_corresponding_eadu, 'res.partner', self.id
+            )
+            if epp:
+                params['eadu_url_ident'] = epp.eadu_ident
+            params['eadu_url'] = partner_corresponding_eadu.eadu_url
+
+        res = eadu_partner.sudo()._eadu_call('res.partner', 'action_eadu_create_contact', params)
+        if res:
+            return EaduAny._search_create_for_eadu_partner(
+                eadu_partner, 'res.partner', self.id, res['result'],
+                partner_master=False,
+            )
+        return False
+
     # def write(self, vals):
     #     res = super().write(vals)
     #     for partner in self:
