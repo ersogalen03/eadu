@@ -84,10 +84,10 @@ class MailMessageReaction(models.Model):
             raise
 
         # map remote message to local message
-        m_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+        m_map = self.env['eadu.partner.any']._search_for_eadu_partner(
             eadu_contact, 'mail.message', message_id
         )
-        p_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+        p_map = self.env['eadu.partner.any']._search_for_eadu_partner(
             eadu_contact, 'res.partner', partner_id
         )
         if not m_map or not p_map:
@@ -107,9 +107,9 @@ class MailMessageReaction(models.Model):
 
     def action_eadu_remove(self, eadu_ident):
         eadu_contact = self.env.user.partner_id
-        eadu_any = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+        eadu_any = self.env['eadu.partner.any']._search_for_eadu_partner(
             eadu_contact, 'mail.message.reaction', eadu_ident
         )
         if eadu_any:
-            self.env['mail.message.reaction'].sudo().browse(eadu_any.res_id).unlink()
-            eadu_any.unlink()
+            self.env['mail.message.reaction'].browse(eadu_any.res_id).unlink()
+            eadu_any.sudo().unlink()

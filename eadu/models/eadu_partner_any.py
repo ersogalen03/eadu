@@ -355,7 +355,7 @@ class EaduPartnerAny(models.Model):
     def remote_sync(self, res_model, res_id, vals):
         """ Called from remote to update the record """
         eadu_contact = self.env.user.partner_id
-        eadu_any = self.sudo()._search_for_eadu_partner(eadu_contact, res_model, res_id)
+        eadu_any = self._search_for_eadu_partner(eadu_contact, res_model, res_id)
         if eadu_any:
             record = eadu_any._get_record()
             if record:

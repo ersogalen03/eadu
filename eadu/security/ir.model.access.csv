@@ -1,4 +1,5 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_eadu_partner_any_user,eadu.partner.any user,eadu.model_eadu_partner_any,base.group_user,1,0,0,0
 access_eadu_partner_any_portal_eadu,eadu.partner.any portal eadu,eadu.model_eadu_partner_any,eadu.group_portal_eadu,1,0,0,0
+access_mail_message_reaction_portal_eadu,mail.message.reaction portal eadu,mail.model_mail_message_reaction,eadu.group_portal_eadu,1,0,0,1
 access_eadu_partner_any_system,eadu.partner.any system,eadu.model_eadu_partner_any,base.group_system,1,1,1,1

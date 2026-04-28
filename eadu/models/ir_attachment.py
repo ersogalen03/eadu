@@ -81,7 +81,7 @@ class IrAttachment(models.Model):
             raise
 
         # Map remote target to local
-        target_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+        target_map = self.env['eadu.partner.any']._search_for_eadu_partner(
             eadu_contact, res_model, res_id
         )
         local_res_id = target_map and target_map.res_id

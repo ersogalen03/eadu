@@ -64,7 +64,7 @@ class DiscussChannel(models.Model):
         if not partner_ids or not isinstance(partner_ids, list):
             raise
         
-        if epa := self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(user.partner_id, 'discuss.channel', eadu_ident):
+        if epa := self.env['eadu.partner.any']._search_for_eadu_partner(user.partner_id, 'discuss.channel', eadu_ident):
             return {'channel_id': epa.res_id} 
         partners = self.env['res.partner'].sudo().browse(partner_ids)
         for partner in partners:
@@ -78,7 +78,7 @@ class DiscussChannel(models.Model):
             'channel_partner_ids': [(4, x) for x in partner_ids],
             'channel_type': channel_type,
         }
-        channel = self.env['discuss.channel'].with_user(puser).sudo().create(vals)
+        channel = self.env['discuss.channel'].with_user(puser).create(vals)
         print(channel, channel.id)
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
             user.partner_id, 

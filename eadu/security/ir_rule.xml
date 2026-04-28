@@ -34,6 +34,17 @@
             <field name="groups" eval="[(6, 0, [ref('eadu.group_portal_eadu')])]"/>
         </record>
 
+        <record id="eadu_rule_portal_mail_message_reaction" model="ir.rule">
+            <field name="name">Eadu access via partner mapping (mail.message.reaction)</field>
+            <field name="model_id" ref="mail.model_mail_message_reaction"/>
+            <field name="domain_force">[('id','in', user.env['eadu.partner.any'].search([('partner_id', '=', user.partner_id.id), ('res_model', '=', 'mail.message.reaction')]).mapped('res_id'))] or []</field>
+            <field name="perm_read" eval="True"/>
+            <field name="perm_write" eval="False"/>
+            <field name="perm_create" eval="False"/>
+            <field name="perm_unlink" eval="True"/>
+            <field name="groups" eval="[(6, 0, [ref('eadu.group_portal_eadu')])]"/>
+        </record>
+
         <!-- Portal Eadu users: can read only their own eadu.partner.any entries -->
         <record id="eadu_rule_portal_eadu_partner_any" model="ir.rule">
             <field name="name">Eadu Partner Any: own entries</field>
