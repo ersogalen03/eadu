@@ -8,6 +8,8 @@ import threading
 from odoo import api, fields, models, Command, _
 from odoo.addons.mail.tools.discuss import Store
 
+from odoo.addons.eadu.exceptions import EaduConnectionError
+
 
 class ResPartner(models.Model):
     _inherit = "res.partner"
@@ -203,23 +205,31 @@ class ResPartner(models.Model):
         return {'result': partner.id}
 
     def _eadu_call(self, model, method, params):
-        """
-        self = eaducontact
+        """Make a synchronous JSON RPC call to the remote eadu instance.
+
+        Raises ``EaduConnectionError`` on any network or HTTP-level failure so that
+        callers can route the call through the queue instead of crashing.
         """
         self.ensure_one()
         url = f"{self.eadu_url}/json/2/{model}/{method}"
-        print("URL", url)
-        result = requests.post(
-            url,
-            headers={
-                "X-Odoo-Database": self.eadu_db,
-                "Authorization": f"bearer {self.eadu_apikey}",
-            },
-            json=params,
-        ).json()
-        # TODO: error handling and stuff
-
-        return result
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "X-Odoo-Database": self.eadu_db,
+                    "Authorization": f"bearer {self.eadu_apikey}",
+                },
+                json=params,
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.Timeout as exc:
+            raise EaduConnectionError(f"Timeout calling {url}") from exc
+        except requests.exceptions.ConnectionError as exc:
+            raise EaduConnectionError(f"Connection error calling {url}") from exc
+        except requests.exceptions.HTTPError as exc:
+            raise EaduConnectionError(f"HTTP error calling {url}: {exc}") from exc
 
     @api.readonly
     @api.model
@@ -243,23 +253,24 @@ class ResPartner(models.Model):
     def _eadu_ensure_remote_partner(self, eadu_partner):
         """Ensure this partner exists on the remote instance for eadu_partner.
 
-        Looks up an existing eadu.partner.any mapping first; only calls the
-        remote API when no mapping is found yet.  Returns the eadu.partner.any
-        record on success, or False when the remote call fails.
+        Returns the ``eadu.partner.any`` record for this mapping.  When the remote
+        call cannot be sent immediately (connection blocked), a placeholder record
+        with ``eadu_ident=0`` is returned and the call is queued for retry.
+        Returns ``False`` only when the partner cannot be associated at all.
         """
         self.ensure_one()
         EaduAny = self.env['eadu.partner.any'].sudo()
         epu = EaduAny._search_for_eadu_partner(eadu_partner, 'res.partner', self.id)
         if epu:
-            return epu
+            return epu  # Already mapped (eadu_ident may be 0 if still queued).
 
         params = {
             'name': self.name,
             'email': self.email,
             'eadu_ident': self.id,
         }
-        # If this partner itself belongs to another EADU instance, pass the
-        # cross-reference so the remote can deduplicate.
+        # If this partner belongs to another EADU instance, pass the cross-reference
+        # so the remote can deduplicate.
         partner_corresponding_eadu = self._get_eadu_partner()
         if partner_corresponding_eadu:
             epp = EaduAny._search_for_eadu_partner(
@@ -269,13 +280,16 @@ class ResPartner(models.Model):
                 params['eadu_url_ident'] = epp.eadu_ident
             params['eadu_url'] = partner_corresponding_eadu.eadu_url
 
-        res = eadu_partner.sudo()._eadu_call('res.partner', 'action_eadu_create_contact', params)
-        if res:
-            return EaduAny._search_create_for_eadu_partner(
-                eadu_partner, 'res.partner', self.id, res['result'],
-                partner_master=False,
-            )
-        return False
+        return EaduAny._send_or_queue(
+            eadu_partner,
+            'res.partner',
+            'action_eadu_create_contact',
+            params,
+            local_model='res.partner',
+            local_res_id=self.id,
+            result_key='result',
+            partner_master=False,
+        )
 
     # def write(self, vals):
     #     res = super().write(vals)

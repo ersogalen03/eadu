@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from odoo.tests import common, tagged
 
+from odoo.addons.eadu.exceptions import EaduConnectionError
 from odoo.addons.eadu.models import res_partner as res_partner_model
 
 
@@ -59,11 +60,12 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             }
         )
 
+        self._blocked_partners = set()  # set of eadu_contact.id → raises EaduConnectionError
         self._eadu_call_patcher = patch.object(
             res_partner_model.ResPartner,
             "_eadu_call",
             autospec=True,
-            side_effect=self._local_cross_company_call,
+            side_effect=self._local_cross_company_call_or_timeout,
         )
         self._eadu_call_patcher.start()
         self.addCleanup(self._eadu_call_patcher.stop)
@@ -89,6 +91,12 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         remote_user = self._get_eadu_portal_user_from_apikey(eadu_contact)
         remote_model = self.env[model].with_user(remote_user)
         return getattr(remote_model, method)(**params)
+
+    def _local_cross_company_call_or_timeout(self, eadu_contact, model, method, params):
+        """Like _local_cross_company_call but raises EaduConnectionError for blocked partners."""
+        if eadu_contact.id in self._blocked_partners:
+            raise EaduConnectionError("mocked connection failure")
+        return self._local_cross_company_call(eadu_contact, model, method, params)
 
     def test_exchange_token_flow_via_multicompany(self):
         # Company A starts the handshake and emits the exchange token.
@@ -410,3 +418,242 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
                 message.attachment_ids.mapped("name"),
                 "Replicated message should keep the attachment filename",
             )
+
+    # ── Queue / retry tests ───────────────────────────────────────────────────
+
+    def _do_ab_exchange(self):
+        """Perform the A ↔ B exchange and return the channel in A."""
+        exchange_token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        self.partner_b.with_user(self.user_b).write({"eadu_exchanged": exchange_token})
+        self.partner_b.with_user(self.user_b).button_process_eadu_exchanged()
+
+        alice_contact_a = self.user_a.partner_id
+        bob_contact_a = self.partner_a.child_ids.filtered(
+            lambda p: p.name == self.user_b.name and p.type == "contact"
+        )[:1]
+        return alice_contact_a, bob_contact_a
+
+    def test_queue_on_timeout_and_retry_two_companies(self):
+        """
+        When B's connection times out, outgoing calls are queued on the
+        eadu.partner.any records (with eadu_ident=0 as placeholders).  After
+        the connection is restored, _retry_all_queued_calls() delivers the
+        queued messages in the correct order.
+        """
+        alice_contact_a, bob_contact_a = self._do_ab_exchange()
+        # The eadu contact A uses when calling B (child of partner_a pointing at B's URL).
+        eadu_contact_a_to_b = self.partner_a._get_eadu_partner()
+        eadu_contact_b = self.partner_b._get_eadu_partner()
+
+        channel_name = "Queue Retry Test Channel A-B"
+        channel_a = self.env["discuss.channel"].with_user(self.user_a).create(
+            {
+                "name": channel_name,
+                "channel_type": "channel",
+                "channel_partner_ids": [
+                    (4, alice_contact_a.id),
+                    (4, bob_contact_a.id),
+                ],
+            }
+        )
+
+        # Block B and post two messages.
+        self._blocked_partners.add(eadu_contact_a_to_b.id)
+
+        body1 = "First queued message"
+        body2 = "Second queued message"
+        channel_a.with_user(self.user_a).message_post(body=body1)
+        channel_a.with_user(self.user_a).message_post(body=body2)
+
+        # B should have pending_calls but no mirrored messages yet.
+        pending = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_a_to_b.id),
+            ("pending_calls", "!=", False),
+        ])
+        self.assertTrue(pending, "Queued calls should be stored on eadu.partner.any records")
+
+        mirrored_channels_while_blocked = self.env["discuss.channel"].sudo().search(
+            [("name", "=", channel_name), ("id", "!=", channel_a.id)]
+        )
+        # The channel creation itself was also queued, so no mirrored channel yet.
+        for ch in mirrored_channels_while_blocked:
+            has_msg = self.env["mail.message"].sudo().search([
+                ("model", "=", "discuss.channel"),
+                ("res_id", "=", ch.id),
+                ("body", "ilike", body1),
+            ], limit=1)
+            self.assertFalse(has_msg, "Messages should not have arrived at B while blocked")
+
+        # Restore B and retry.
+        self._blocked_partners.discard(eadu_contact_a_to_b.id)
+        self.env["eadu.partner.any"].sudo()._retry_all_queued_calls()
+
+        # All pending_calls should now be cleared.
+        still_pending = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_a_to_b.id),
+            ("pending_calls", "!=", False),
+        ])
+        self.assertFalse(
+            still_pending,
+            "All queued calls should be sent after retry",
+        )
+
+        # Both messages should now appear in B's mirrored channel.
+        mirrored_channels = self.env["discuss.channel"].sudo().search(
+            [("name", "=", channel_name), ("id", "!=", channel_a.id)]
+        )
+        self.assertTrue(mirrored_channels, "Mirrored channel should exist in B after retry")
+        mirrored_channel = mirrored_channels[0]
+
+        for body in (body1, body2):
+            msg = self.env["mail.message"].sudo().search(
+                [
+                    ("model", "=", "discuss.channel"),
+                    ("res_id", "=", mirrored_channel.id),
+                    ("body", "ilike", body),
+                ],
+                limit=1,
+            )
+            self.assertTrue(msg, f"Message '{body}' should arrive at B after retry")
+
+        # Messages must arrive in the right order (body1 before body2).
+        msg1 = self.env["mail.message"].sudo().search(
+            [("res_id", "=", mirrored_channel.id), ("body", "ilike", body1)], limit=1
+        )
+        msg2 = self.env["mail.message"].sudo().search(
+            [("res_id", "=", mirrored_channel.id), ("body", "ilike", body2)], limit=1
+        )
+        self.assertLess(msg1.id, msg2.id, "Messages should be replicated in send order")
+
+    def test_queue_on_timeout_three_companies_with_retry(self):
+        """
+        In a 3-company channel (A, B, C), when C times out, messages are
+        queued for C while B receives them normally.  After retry, C also
+        receives all missing messages in order.
+        """
+        # ── Setup: exchange A↔B and A↔C ──────────────────────────────────────
+        company_c = self.ResCompany.create({"name": "EADU Test Company C (retry)"})
+        partner_c = self.ResPartner.create(
+            {
+                "name": "DB C (retry)",
+                "company_type": "company",
+                "company_id": company_c.id,
+            }
+        )
+        group_user = self.env.ref("base.group_user")
+        group_partner_manager = self.env.ref("base.group_partner_manager")
+        group_system = self.env.ref("base.group_system")
+        user_c = self.ResUsers.create(
+            {
+                "name": "Carol C (retry)",
+                "login": "carol_c_retry_eadu_test",
+                "email": "carol_c_retry@example.com",
+                "company_id": company_c.id,
+                "company_ids": [(6, 0, [company_c.id])],
+                "group_ids": [(6, 0, [group_user.id, group_partner_manager.id, group_system.id])],
+            }
+        )
+
+        exchange_token_ab = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        self.partner_b.with_user(self.user_b).write({"eadu_exchanged": exchange_token_ab})
+        self.partner_b.with_user(self.user_b).button_process_eadu_exchanged()
+
+        exchange_token_ac = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        partner_c.with_user(user_c).write({"eadu_exchanged": exchange_token_ac})
+        partner_c.with_user(user_c).button_process_eadu_exchanged()
+
+        alice_contact_b = self.partner_b.child_ids.filtered(
+            lambda p: p.name == self.user_a.name and p.type == "contact"
+        )[:1]
+        alice_contact_c = partner_c.child_ids.filtered(
+            lambda p: p.name == self.user_a.name and p.type == "contact"
+        )[:1]
+        eadu_contact_c = partner_c._get_eadu_partner()
+
+        channel_name = "Three Company Retry Channel"
+        channel_a = self.env["discuss.channel"].with_user(self.user_a).create(
+            {
+                "name": channel_name,
+                "channel_type": "channel",
+                "channel_partner_ids": [
+                    (4, self.user_a.partner_id.id),
+                    (4, alice_contact_b.id),
+                    (4, alice_contact_c.id),
+                ],
+            }
+        )
+
+        # Block C and send two messages.
+        self._blocked_partners.add(eadu_contact_c.id)
+
+        body_queued_1 = "Message 1 queued for C"
+        body_queued_2 = "Message 2 queued for C"
+        channel_a.with_user(self.user_a).message_post(body=body_queued_1)
+        channel_a.with_user(self.user_a).message_post(body=body_queued_2)
+
+        # B should have received both messages, C should have pending_calls.
+        all_channels = self.env["discuss.channel"].sudo().search([("name", "=", channel_name)])
+        channel_b = all_channels.filtered(
+            lambda ch: ch.id != channel_a.id and
+            self.env["eadu.partner.any"].sudo().search([
+                ("partner_id", "=", self.partner_b._get_eadu_partner().id),
+                ("res_model", "=", "discuss.channel"),
+                ("eadu_ident", "=", ch.id),
+            ], limit=1)
+        )[:1]
+
+        if channel_b:
+            for body in (body_queued_1, body_queued_2):
+                msg_b = self.env["mail.message"].sudo().search(
+                    [("res_id", "=", channel_b.id), ("body", "ilike", body)], limit=1
+                )
+                self.assertTrue(msg_b, f"B should have received '{body}' immediately")
+
+        pending_c = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_c.id),
+            ("pending_calls", "!=", False),
+        ])
+        self.assertTrue(pending_c, "C should have pending queued calls while blocked")
+
+        # Restore C and retry.
+        self._blocked_partners.discard(eadu_contact_c.id)
+        self.env["eadu.partner.any"].sudo()._retry_all_queued_calls()
+
+        still_pending_c = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_c.id),
+            ("pending_calls", "!=", False),
+        ])
+        self.assertFalse(still_pending_c, "C's queue should be empty after retry")
+
+        # C's mirrored channel should now have both messages.
+        mapping_c = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_c.id),
+            ("res_model", "=", "discuss.channel"),
+            ("res_id", "=", channel_a.id),
+        ], limit=1)
+        self.assertTrue(mapping_c, "discuss.channel mapping to C should exist after retry")
+        channel_c = self.env["discuss.channel"].sudo().browse(mapping_c.eadu_ident)
+
+        for body in (body_queued_1, body_queued_2):
+            msg_c = self.env["mail.message"].sudo().search(
+                [
+                    ("model", "=", "discuss.channel"),
+                    ("res_id", "=", channel_c.id),
+                    ("body", "ilike", body),
+                ],
+                limit=1,
+            )
+            self.assertTrue(
+                msg_c,
+                f"Message '{body}' should have arrived at C after retry",
+            )
+
+        # Order must be preserved.
+        msg_c_1 = self.env["mail.message"].sudo().search(
+            [("res_id", "=", channel_c.id), ("body", "ilike", body_queued_1)], limit=1
+        )
+        msg_c_2 = self.env["mail.message"].sudo().search(
+            [("res_id", "=", channel_c.id), ("body", "ilike", body_queued_2)], limit=1
+        )
+        self.assertLess(msg_c_1.id, msg_c_2.id, "Messages should arrive at C in send order")
+

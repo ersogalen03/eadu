@@ -45,18 +45,26 @@ class MailMessage(models.Model):
                 epu = self.env.user.partner_id._eadu_ensure_remote_partner(eadu_partner)
 
                 # 3. Ensure the channel itself exists remotely (uses mappings from steps 1-2).
-                channel_eadu_ident = channel._eadu_ensure_remote_channel(eadu_partner)
-                if not channel_eadu_ident:
+                channel_link = channel._eadu_ensure_remote_channel(eadu_partner)
+                if not channel_link:
                     continue
+
+                # Build ident_placeholders for any unresolved references.
+                ident_placeholders = {}
+                if channel_link and not channel_link.eadu_ident:
+                    ident_placeholders['res_id'] = channel_link.id
+                if epu and not epu.eadu_ident:
+                    ident_placeholders['partner_id'] = epu.id
 
                 results.append({
                     'partner': eadu_partner,
                     'payload': {
                         'model': 'discuss.channel',
-                        'res_id': channel_eadu_ident,
+                        'res_id': channel_link.eadu_ident or None,
                         'body': body,
-                        'partner_id': epu.eadu_ident if epu else False,
+                        'partner_id': (epu.eadu_ident or None) if epu else None,
                     },
+                    'ident_placeholders': ident_placeholders,
                 })
 
             return eadu_partners, results
@@ -71,7 +79,7 @@ class MailMessage(models.Model):
                     'model': model,
                     'res_id': res_id, # TODO: better logic please if model is e.g. res_partner
                     'body': body,
-                    'partner_id': eup.eadu_ident,
+                    'partner_id': eup.eadu_ident if eup else None,
                 }
                 return eadu_contact, result
         return False, False
@@ -81,6 +89,7 @@ class MailMessage(models.Model):
         if self.env.context.get('eadu_message'):
             return super(MailMessage, self).create(vals)
         recs = self.env['mail.message']
+        EaduAny = self.env['eadu.partner.any'].sudo()
         for val in vals:
             created_record = super(MailMessage, self).create(val)
             body = val['body']
@@ -90,23 +99,33 @@ class MailMessage(models.Model):
             if body and model and res_id:
                 partner_group, result = self._handle_eadu_msg(model, res_id, body)
                 if result and partner_group:
-                    # Normalize results to a list of {'partner': <res.partner>, 'payload': {...}}
-                    results_list = result if isinstance(result, list) else [{'partner': partner_group, 'payload': result}]
+                    # Normalize results to a list of {'partner', 'payload', 'ident_placeholders'}.
+                    results_list = result if isinstance(result, list) else [
+                        {'partner': partner_group, 'payload': result, 'ident_placeholders': {}}
+                    ]
                     for item in results_list:
                         eadu_partner = item['partner']
                         payload = dict(item['payload'])
+                        item_placeholders = dict(item.get('ident_placeholders') or {})
                         payload['eadu_ident'] = created_record.id
 
-                        # Collect remote attachment ids for this specific partner
-                        remote_attachment_ids = []
+                        # ── Handle attachments ───────────────────────────────
+                        att_any_ids = []
+                        remote_att_ids = []
+                        has_queued_att = False
+
                         for att in created_record.attachment_ids.sudo():
-                            # Reuse existing mapping if available
-                            existing = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                            existing = EaduAny._search_for_eadu_partner(
                                 eadu_partner, 'ir.attachment', att.id
                             )
                             if existing:
-                                remote_attachment_ids.append(existing.eadu_ident)
+                                if existing.eadu_ident:
+                                    remote_att_ids.append(existing.eadu_ident)
+                                else:
+                                    att_any_ids.append(existing.id)
+                                    has_queued_att = True
                                 continue
+
                             att_payload = {
                                 'name': att.name,
                                 'datas': att.datas.decode() if isinstance(att.datas, bytes) else att.datas,
@@ -115,34 +134,43 @@ class MailMessage(models.Model):
                                 'res_id': None,
                                 'eadu_ident': att.id,
                             }
-                            try:
-                                a_res = eadu_partner.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', att_payload)
-                                if a_res and 'attachment_id' in a_res:
-                                    remote_attachment_ids.append(a_res['attachment_id'])
-                                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                        eadu_partner, 'ir.attachment', att.id, a_res['attachment_id'],
-                                        partner_master=False
-                                    )
-                            except Exception:
-                                # continue even if one attachment fails
-                                pass
-
-                        # Create the remote message for this partner
-                        payload['attachment_ids'] = remote_attachment_ids
-                        try:
-                            res = eadu_partner._eadu_call(
-                                'mail.message',
-                                'action_eadu_receive', 
-                                payload, 
+                            att_any = EaduAny._send_or_queue(
+                                eadu_partner,
+                                'ir.attachment',
+                                'action_eadu_receive',
+                                att_payload,
+                                local_model='ir.attachment',
+                                local_res_id=att.id,
+                                result_key='attachment_id',
+                                partner_master=False,
                             )
-                            if res and 'message_id' in res:
-                                self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                    eadu_partner, 'mail.message', created_record.id, res['message_id'],
-                                    partner_master=False
-                                )
-                        except Exception:
-                            # Don't block local creation if remote fails for one partner
-                            pass
+                            if att_any:
+                                att_any_ids.append(att_any.id)
+                                if att_any.eadu_ident:
+                                    remote_att_ids.append(att_any.eadu_ident)
+                                else:
+                                    has_queued_att = True
+
+                        # When any attachment is queued, store all attachment
+                        # any-ids as placeholders so they are resolved on retry.
+                        if has_queued_att:
+                            item_placeholders['attachment_ids'] = att_any_ids
+                            payload['attachment_ids'] = []
+                        else:
+                            payload['attachment_ids'] = remote_att_ids
+
+                        # ── Send / queue the message itself ──────────────────
+                        EaduAny._send_or_queue(
+                            eadu_partner,
+                            'mail.message',
+                            'action_eadu_receive',
+                            payload,
+                            local_model='mail.message',
+                            local_res_id=created_record.id,
+                            result_key='message_id',
+                            partner_master=False,
+                            ident_placeholders=item_placeholders,
+                        )
 
             recs += created_record
         return recs
@@ -187,7 +215,8 @@ class MailMessage(models.Model):
                 partner_master = False
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'mail.message', message.id, eadu_ident, partner_master=partner_master)
         if not partner_master:
-            # It means I am the master and need to send it to other EADU endpoints in the channel.
+            # I am the master and need to relay to other EADU endpoints in the channel.
+            EaduAny = self.env['eadu.partner.any'].sudo()
             channel = self.env['discuss.channel'].browse(res_id).sudo()
             partners = channel.channel_partner_ids
             for partner in partners:
@@ -195,29 +224,37 @@ class MailMessage(models.Model):
                 if not eadu_partner_upd or eadu_partner_upd == eadu_contact:
                     continue
 
-                existing_msg_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                existing_msg_map = EaduAny._search_for_eadu_partner(
                     eadu_partner_upd, 'mail.message', message.id
                 )
                 if existing_msg_map:
                     continue
 
                 # Find channel and partner mapping for this remote endpoint.
-                channel_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                channel_map = EaduAny._search_for_eadu_partner(
                     eadu_partner_upd, model, res_id
                 )
-                partner_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                partner_map = EaduAny._search_for_eadu_partner(
                     eadu_partner_upd, 'res.partner', partner.id
                 )
                 if not channel_map or not partner_map:
                     continue
 
-                remote_attachment_ids = []
+                # ── Handle attachments for this relay destination ────────────
+                att_any_ids = []
+                remote_att_ids = []
+                has_queued_att = False
+
                 for att in message.attachment_ids.sudo():
-                    existing_att_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                    existing_att_map = EaduAny._search_for_eadu_partner(
                         eadu_partner_upd, 'ir.attachment', att.id
                     )
                     if existing_att_map:
-                        remote_attachment_ids.append(existing_att_map.eadu_ident)
+                        if existing_att_map.eadu_ident:
+                            remote_att_ids.append(existing_att_map.eadu_ident)
+                        else:
+                            att_any_ids.append(existing_att_map.id)
+                            has_queued_att = True
                         continue
 
                     att_payload = {
@@ -228,31 +265,49 @@ class MailMessage(models.Model):
                         'res_id': None,
                         'eadu_ident': att.id,
                     }
-                    try:
-                        a_res = eadu_partner_upd.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', att_payload)
-                        if a_res and 'attachment_id' in a_res:
-                            remote_attachment_ids.append(a_res['attachment_id'])
-                            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                                eadu_partner_upd, 'ir.attachment', att.id, a_res['attachment_id'],
-                                partner_master=False
-                            )
-                    except Exception:
-                        pass
-
-                result = eadu_partner_upd.sudo()._eadu_call('mail.message', 'action_eadu_receive', {
-                    'model': model,
-                    'res_id': channel_map.eadu_ident,
-                    'body': body,
-                    'partner_id': partner_map.eadu_ident,
-                    'eadu_ident': message.id,
-                    'attachment_ids': remote_attachment_ids,
-                })
-                if result and result.get('message_id'):
-                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                        eadu_partner_upd, 'mail.message', message.id, result['message_id'],
-                        partner_master=False
-                        
+                    att_any = EaduAny._send_or_queue(
+                        eadu_partner_upd,
+                        'ir.attachment',
+                        'action_eadu_receive',
+                        att_payload,
+                        local_model='ir.attachment',
+                        local_res_id=att.id,
+                        result_key='attachment_id',
+                        partner_master=False,
                     )
+                    if att_any:
+                        att_any_ids.append(att_any.id)
+                        if att_any.eadu_ident:
+                            remote_att_ids.append(att_any.eadu_ident)
+                        else:
+                            has_queued_att = True
+
+                relay_placeholders = {}
+                if not channel_map.eadu_ident:
+                    relay_placeholders['res_id'] = channel_map.id
+                if not partner_map.eadu_ident:
+                    relay_placeholders['partner_id'] = partner_map.id
+                if has_queued_att:
+                    relay_placeholders['attachment_ids'] = att_any_ids
+
+                EaduAny._send_or_queue(
+                    eadu_partner_upd,
+                    'mail.message',
+                    'action_eadu_receive',
+                    {
+                        'model': model,
+                        'res_id': channel_map.eadu_ident or None,
+                        'body': body,
+                        'partner_id': partner_map.eadu_ident or None,
+                        'eadu_ident': message.id,
+                        'attachment_ids': [] if has_queued_att else remote_att_ids,
+                    },
+                    local_model='mail.message',
+                    local_res_id=message.id,
+                    result_key='message_id',
+                    partner_master=False,
+                    ident_placeholders=relay_placeholders,
+                )
 
 
 

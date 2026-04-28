@@ -10,7 +10,7 @@ class IrAttachment(models.Model):
     def _eadu_sync_created_or_updated(self, vals):
         if self.env.context.get('eadu_message'):
             return
-        
+
         attachment = self
         res_model = vals.get('res_model') or attachment.res_model
         res_id = vals.get('res_id') or attachment.res_id
@@ -29,14 +29,24 @@ class IrAttachment(models.Model):
                     'datas': datas.decode() if isinstance(datas, bytes) else datas,
                     'mimetype': attachment.mimetype,
                     'res_model': res_model,
-                    'res_id': eadu_any.eadu_ident,
+                    'res_id': eadu_any.eadu_ident or None,
                     'eadu_ident': attachment.id,
                 }
-                res = eadu_contact.sudo()._eadu_call('ir.attachment', 'action_eadu_receive', payload)
-                if res and 'attachment_id' in res:
-                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                        eadu_contact, 'ir.attachment', attachment.id, res['attachment_id']
-                    )
+                msg_placeholder = {}
+                if not eadu_any.eadu_ident:
+                    msg_placeholder['res_id'] = eadu_any.id
+
+                self.env['eadu.partner.any'].sudo()._send_or_queue(
+                    eadu_contact,
+                    'ir.attachment',
+                    'action_eadu_receive',
+                    payload,
+                    local_model='ir.attachment',
+                    local_res_id=attachment.id,
+                    result_key='attachment_id',
+                    partner_master=False,
+                    ident_placeholders=msg_placeholder,
+                )
 
     @api.model_create_multi
     def create(self, vals_list):

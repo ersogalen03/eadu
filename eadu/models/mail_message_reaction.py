@@ -16,48 +16,65 @@ class MailMessageReaction(models.Model):
             reaction = super(MailMessageReaction, self).create(vals)
 
             message = reaction.message_id
-            # find all remote mappings for this message and sync reaction creation
+            # Find all remote mappings for this message and sync reaction creation.
             eadu_anys = self.env['eadu.partner.any'].sudo().search([
                 ('res_model', '=', 'mail.message'), ('res_id', '=', message.id)
             ])
             for eadu_any in eadu_anys:
                 eadu_contact = eadu_any.partner_id
-                # map current reacting partner to remote partner
                 remote_partner = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
                     eadu_contact, 'res.partner', self.env.user.partner_id.id
                 )
                 if not remote_partner:
                     continue
-                params = {
-                    'message_id': eadu_any.eadu_ident,
-                    'content': reaction.content,
-                    'partner_id': remote_partner.eadu_ident,
-                    'eadu_ident': reaction.id,
-                }
-                res = eadu_contact.sudo()._eadu_call('mail.message.reaction', 'action_eadu_receive', params)
-                if res and 'reaction_id' in res:
-                    self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
-                        eadu_contact, 'mail.message.reaction', reaction.id, res['reaction_id']
-                    )
+
+                # Build ident_placeholders for any unresolved references.
+                ident_placeholders = {}
+                if not eadu_any.eadu_ident:
+                    ident_placeholders['message_id'] = eadu_any.id
+                if not remote_partner.eadu_ident:
+                    ident_placeholders['partner_id'] = remote_partner.id
+
+                self.env['eadu.partner.any'].sudo()._send_or_queue(
+                    eadu_contact,
+                    'mail.message.reaction',
+                    'action_eadu_receive',
+                    {
+                        'message_id': eadu_any.eadu_ident or None,
+                        'content': reaction.content,
+                        'partner_id': remote_partner.eadu_ident or None,
+                        'eadu_ident': reaction.id,
+                    },
+                    local_model='mail.message.reaction',
+                    local_res_id=reaction.id,
+                    result_key='reaction_id',
+                    partner_master=False,
+                    ident_placeholders=ident_placeholders,
+                )
 
             reactions |= reaction
         return reactions
 
     def unlink(self):
-        # propagate removal remotely when applicable
+        # Propagate removal remotely when applicable.
         for reaction in self:
             eadu_anys = self.env['eadu.partner.any'].sudo().search([
                 ('res_model', '=', 'mail.message.reaction'), ('res_id', '=', reaction.id)
             ])
             for eadu_any in eadu_anys:
                 eadu_contact = eadu_any.partner_id
-                try:
-                    eadu_contact.sudo()._eadu_call('mail.message.reaction', 'action_eadu_remove', {
-                        'eadu_ident': eadu_any.eadu_ident,
-                    })
-                except Exception:
-                    # best-effort removal; continue
-                    pass
+                if not eadu_any.eadu_ident and eadu_any.pending_calls:
+                    # Creation was queued but never sent; cancel it.
+                    eadu_any.unlink()
+                    continue
+                self.env['eadu.partner.any'].sudo()._send_or_queue(
+                    eadu_contact,
+                    'mail.message.reaction',
+                    'action_eadu_remove',
+                    {'eadu_ident': eadu_any.eadu_ident},
+                    eadu_any_ref=eadu_any,
+                    post_action='remove_eadu_any',
+                )
         return super().unlink()
 
     # Remote entry points
