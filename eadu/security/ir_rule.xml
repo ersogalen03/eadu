@@ -10,7 +10,7 @@
             <field name="perm_create" eval="True"/>
             <field name="perm_unlink" eval="False"/>
             <field name="groups" eval="[(6, 0, [ref('eadu.group_portal_eadu')])]"/>
-        </record>
+        </record>   
 
         <record id="eadu_rule_portal_mail_message" model="ir.rule">
             <field name="name">Eadu access via partner mapping (mail.message)</field>

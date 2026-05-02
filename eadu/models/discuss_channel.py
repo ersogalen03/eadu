@@ -78,7 +78,7 @@ class DiscussChannel(models.Model):
             'channel_partner_ids': [(4, x) for x in partner_ids],
             'channel_type': channel_type,
         }
-        channel = self.env['discuss.channel'].with_user(puser).create(vals)
+        channel = self.env['discuss.channel'].with_user(puser).sudo().create(vals)
         print(channel, channel.id)
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
             user.partner_id, 
