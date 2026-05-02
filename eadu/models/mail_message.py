@@ -12,6 +12,38 @@ class MailMessage(models.Model):
     def _convert_model(self, model, res_id):
         return model, res_id
 
+    def _rewrite_oe_links(self, body, eadu_partner):
+        """
+        Replace every ``data-oe-model`` / ``data-oe-id`` href pair in *body*
+        with the remote counterpart id when a matching ``eadu.partner.any``
+        record exists for *eadu_partner*.
+
+        Works for any model (res.partner, product.template, ir.attachment, …)
+        as long as the record was previously synced and has an eadu_ident.
+
+        Returns the rewritten body (unchanged if no replacements were made).
+        """
+        EaduAny = self.env['eadu.partner.any'].sudo()
+        pattern = re.compile(
+            r'data-oe-model="(?P<model>[^"]+)"\s+data-oe-id="(?P<id>[0-9]+)"'
+            r'|'
+            r'data-oe-id="(?P<id2>[0-9]+)"\s+data-oe-model="(?P<model2>[^"]+)"'
+        )
+        def _replace(m):
+            oe_model = m.group('model') or m.group('model2')
+            oe_id    = int(m.group('id') or m.group('id2'))
+            link = EaduAny._search_for_eadu_partner(eadu_partner, oe_model, oe_id)
+            if link and link.eadu_ident:
+                remote_id = link.eadu_ident
+                return (
+                    f'data-oe-model="{oe_model}" data-oe-id="{remote_id}"'
+                )
+            # No mapping yet – leave the original text as-is so the link is
+            # at least visible on the remote side, even if it cannot resolve.
+            return m.group(0)
+
+        return pattern.sub(_replace, body)
+
     def _handle_eadu_msg(self, model, res_id, body):
         if model == 'discuss.channel':
             channel = self.env['discuss.channel'].browse(res_id)
@@ -49,6 +81,9 @@ class MailMessage(models.Model):
                 if not channel_link:
                     continue
 
+                # 4. Rewrite any data-oe-model/data-oe-id links in the body.
+                rewritten_body = self._rewrite_oe_links(body, eadu_partner)
+
                 # Build ident_placeholders for any unresolved references.
                 ident_placeholders = {}
                 if channel_link and not channel_link.eadu_ident:
@@ -61,7 +96,7 @@ class MailMessage(models.Model):
                     'payload': {
                         'model': 'discuss.channel',
                         'res_id': channel_link.eadu_ident or None,
-                        'body': body,
+                        'body': rewritten_body,
                         'partner_id': (epu.eadu_ident or None) if epu else None,
                     },
                     'ident_placeholders': ident_placeholders,
@@ -69,19 +104,36 @@ class MailMessage(models.Model):
 
             return eadu_partners, results
 
-        if match := re.search('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', body):
-            partner = self.env['res.partner'].browse(int(match.group(1)))
-            if eadu_contact := partner._get_eadu_partner():
-                model, res_id = self._convert_model(model, res_id)
-                body = re.sub('data-oe-id=\"([0-9]+)\" data-oe-model=\"res.partner\"', str(partner.eadu_ident), body)
-                eup = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(eadu_contact, 'res.partner', self.env.user.partner_id.id)
-                result = {
-                    'model': model,
-                    'res_id': res_id, # TODO: better logic please if model is e.g. res_partner
-                    'body': body,
-                    'partner_id': eup.eadu_ident if eup else None,
-                }
-                return eadu_contact, result
+        # Non-channel messages: try to find an eadu partner from any linked
+        # record referenced by a data-oe-model/data-oe-id link in the body.
+        EaduAny = self.env['eadu.partner.any'].sudo()
+        oe_pattern = re.compile(
+            r'data-oe-model="(?P<model>[^"]+)"\s+data-oe-id="(?P<id>[0-9]+)"'
+            r'|'
+            r'data-oe-id="(?P<id2>[0-9]+)"\s+data-oe-model="(?P<model2>[^"]+)"'
+        )
+        for m in oe_pattern.finditer(body):
+            oe_model = m.group('model') or m.group('model2')
+            oe_id    = int(m.group('id') or m.group('id2'))
+            # Look up all eadu partners that have synced this record.
+            links = EaduAny.search([('res_model', '=', oe_model), ('res_id', '=', oe_id)])
+            if not links:
+                continue
+            # Use the first partner found (or improve with multi-partner logic later).
+            eadu_contact = links[0].partner_id
+            model, res_id = self._convert_model(model, res_id)
+            rewritten_body = self._rewrite_oe_links(body, eadu_contact)
+            eup = EaduAny._search_for_eadu_partner(
+                eadu_contact, 'res.partner', self.env.user.partner_id.id
+            )
+            result = {
+                'model': model,
+                'res_id': res_id,
+                'body': rewritten_body,
+                'partner_id': eup.eadu_ident if eup else None,
+            }
+            return eadu_contact, result
+
         return False, False
 
     @api.model_create_multi

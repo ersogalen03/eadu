@@ -18,6 +18,19 @@ On the partner fill in his URL and your id in his db.
         'views/res_partner_views.xml',
         'security/ir_rule.xml',
     ],
+    'assets': {
+        'web.assets_backend': [
+            # Core registry + suggestion service/hook/composer patches
+            'eadu/static/src/mention/eadu_mention_registry.js',
+            'eadu/static/src/mention/eadu_mention_core.js',
+            # Built-in mention types: /partner: and /attachment:
+            'eadu/static/src/mention/eadu_mention_builtin.js',
+            # Shared XML templates for eadu mention types
+            'eadu/static/src/product_mention/product_mention.xml',
+            # processMessage patch for plain-text composer link post-processing
+            'eadu/static/src/product_mention/product_mention.js',
+        ],
+    },
     'demo': [
     ],
     'license': 'LGPL-3',
