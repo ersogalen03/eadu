@@ -1,4 +1,47 @@
 # Part of Eadu. See LICENSE file for full copyright and licensing details.
+"""
+Tests for multi-company Eadu exchange and message synchronisation.
+
+Testing strategy
+----------------
+Cross-database RPC calls (``res.partner._eadu_call``) are intercepted by
+``_local_cross_company_call_or_timeout``.  The mock resolves the portal API key
+stored on the calling Eadu contact to a real ``res.users`` record in the *same*
+database, so the "remote" call executes locally under that user's access rights.
+This avoids any network dependency while exercising the full application code path.
+
+To simulate a connection failure, add the Eadu contact's id to
+``self._blocked_partners`` before the call.  The mock will then raise
+``EaduConnectionError``, causing the queue logic to activate.
+
+Test scenarios
+--------------
+- test_exchange_token_flow_via_multicompany
+    Full A ↔ B handshake: token generation, contact and portal-user setup,
+    discuss channel mirroring, message and attachment replication.
+
+- test_exchange_token_flow_three_companies_discuss_triplication
+    A ↔ B and A ↔ C exchanges.  One message from A fans out to both B and C.
+    A message posted in C's mirrored channel is relayed back to A and B.
+
+- test_queue_on_timeout_and_retry_two_companies
+    B's connection is blocked; messages are queued.  After retry they arrive
+    in send order and the queue is cleared.
+
+- test_queue_on_timeout_three_companies_with_retry
+    Same scenario for a 3-company channel: B receives messages immediately
+    while C is blocked, then C catches up after retry with order preserved.
+
+- test_exchange_idempotent
+    Repeating the exchange does not create duplicate EADU contacts or users.
+
+- test_rewrite_oe_links_remaps_known_ids
+    ``_rewrite_oe_links`` replaces ``data-oe-id`` values with the remote
+    counterpart when a mapping exists.
+
+- test_malformed_exchange_token_raises
+    A corrupt exchange token raises an error before any state is changed.
+"""
 
 import base64
 from unittest.mock import patch
@@ -98,10 +141,48 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             raise EaduConnectionError("mocked connection failure")
         return self._local_cross_company_call(eadu_contact, model, method, params)
 
+    # ── Fixture helpers ───────────────────────────────────────────────────────
+
+    def _create_company_with_user(self, company_name, db_name, user_name, login):
+        """Create a company + top-level partner + user triple.
+
+        Returns ``(company, partner, user)``.
+        """
+        group_user = self.env.ref("base.group_user")
+        group_partner_manager = self.env.ref("base.group_partner_manager")
+        group_system = self.env.ref("base.group_system")
+        company = self.ResCompany.create({"name": company_name})
+        partner = self.ResPartner.create({
+            "name": db_name,
+            "company_type": "company",
+            "company_id": company.id,
+        })
+        user = self.ResUsers.create({
+            "name": user_name,
+            "login": login,
+            "email": f"{login}@example.com",
+            "company_id": company.id,
+            "company_ids": [(6, 0, [company.id])],
+            "group_ids": [(6, 0, [group_user.id, group_partner_manager.id, group_system.id])],
+        })
+        return company, partner, user
+
+    def _do_exchange(self, partner_a, user_a, partner_b, user_b):
+        """Perform the Eadu exchange: A generates a token and B processes it."""
+        token = partner_a.with_user(user_a)._generate_eadu_exchange()
+        partner_b.with_user(user_b).write({"eadu_exchanged": token})
+        partner_b.with_user(user_b).button_process_eadu_exchanged()
+
+    # ── Exchange flow tests ───────────────────────────────────────────────────
+
     def test_exchange_token_flow_via_multicompany(self):
-        # Company A starts the handshake and emits the exchange token.
+        """
+        Full two-company handshake followed by channel creation, message
+        replication and attachment sync in both directions.
+        """
+        # ── Step 1: A generates the exchange token ────────────────────────────
         exchange_token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
-        # Validate token format so test fails early with useful signal.
+        # Validate token format so test fails early with a clear signal.
         base64.b64decode(exchange_token.encode()).decode()
 
         eadu_contact_a = self.partner_a.child_ids.filtered(
@@ -113,10 +194,12 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         )[:1]
         self.assertTrue(eadu_user_a, "EADU portal user should exist for company A")
 
+        # ── Step 2: B processes the token ─────────────────────────────────────
         partner_b_as_user_b = self.partner_b.with_user(self.user_b)
         partner_b_as_user_b.eadu_exchanged = exchange_token
         partner_b_as_user_b.button_process_eadu_exchanged()
 
+        # ── Step 3: verify post-exchange state ────────────────────────────────
         # Both sides should now contain one child contact linked during exchange.
         self.assertTrue(
             self.partner_a.child_ids.filtered(lambda p: p.name == self.user_b.name),
@@ -140,9 +223,10 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
                 ("res_model", "=", "res.partner"),
             ]
         )
-        self.assertTrue(mapping_a)
-        self.assertTrue(mapping_b)
+        self.assertTrue(mapping_a, "eadu.partner.any record should exist on A's side")
+        self.assertTrue(mapping_b, "eadu.partner.any record should exist on B's side")
 
+        # ── Step 4: create a channel and post a message ───────────────────────
         # Use contacts generated by the exchange flow in company A:
         # - Alice: the regular local partner linked to user A.
         # - Bob: the exchanged child contact coming from company B.
@@ -170,6 +254,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         body = "Message sent from company A"
         channel_a.with_user(self.user_a).message_post(body=body)
 
+        # ── Step 5: verify channel and message mirroring ──────────────────────
         # No company_id exists on discuss.channel, so the mirrored copy is
         # another discuss.channel record in the same database during this test.
         mirrored_channels = self.env["discuss.channel"].sudo().search(
@@ -210,6 +295,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             "The posted message should be replicated to the mirrored channel",
         )
 
+        # ── Step 6: reply from B with an attachment; verify sync back to A ────
         # Reply from the mirrored side with an attachment, then ensure this
         # message (and its attachment) is synced back to the original channel.
         remote_user = mirrored_channel.channel_partner_ids.user_ids.filtered(
@@ -255,41 +341,24 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         )
 
     def test_exchange_token_flow_three_companies_discuss_triplication(self):
-        # Create company C and user C.
-        company_c = self.ResCompany.create({"name": "EADU Test Company C"})
-        partner_c = self.ResPartner.create(
-            {
-                "name": "DB C",
-                "company_type": "company",
-                "company_id": company_c.id,
-            }
-        )
-        group_user = self.env.ref("base.group_user")
-        group_partner_manager = self.env.ref("base.group_partner_manager")
-        group_system = self.env.ref("base.group_system")
-        user_c = self.ResUsers.create(
-            {
-                "name": "Carol C",
-                "login": "carol_c_eadu_test",
-                "email": "carol_c@example.com",
-                "company_id": company_c.id,
-                "company_ids": [(6, 0, [company_c.id])],
-                "group_ids": [(6, 0, [group_user.id, group_partner_manager.id, group_system.id])],
-            }
+        """
+        Three-company scenario: A ↔ B and A ↔ C exchanges.  A message from A
+        fans out to B and C; a reply from C is relayed back to A and B.
+        """
+        # ── Setup: add company C ──────────────────────────────────────────────
+        company_c, partner_c, user_c = self._create_company_with_user(
+            company_name="EADU Test Company C",
+            db_name="DB C",
+            user_name="Carol C",
+            login="carol_c_eadu_test",
         )
 
-        # First exchange A <-> B.
-        exchange_token_ab = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
-        self.partner_b.with_user(self.user_b).write({"eadu_exchanged": exchange_token_ab})
-        self.partner_b.with_user(self.user_b).button_process_eadu_exchanged()
+        # ── Step 1: exchange A ↔ B and A ↔ C ─────────────────────────────────
+        self._do_exchange(self.partner_a, self.user_a, self.partner_b, self.user_b)
+        self._do_exchange(self.partner_a, self.user_a, partner_c, user_c)
 
-        # Then exchange A <-> C.
-        exchange_token_ac = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
-        partner_c.with_user(user_c).write({"eadu_exchanged": exchange_token_ac})
-        partner_c.with_user(user_c).button_process_eadu_exchanged()
-
-        # Use one exchanged contact on B side and one on C side so message fan-out
-        # resolves to two distinct EADU endpoints (B and C).
+        # ── Step 2: verify contacts were created on each side ─────────────────
+        # Alice's contact should exist under both B and C after the exchanges.
         alice_contact_b = self.partner_b.child_ids.filtered(
             lambda p: p.name == self.user_a.name and p.type == "contact"
         )[:1]
@@ -299,7 +368,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertTrue(alice_contact_b, "Expected exchanged Alice contact under company B")
         self.assertTrue(alice_contact_c, "Expected exchanged Alice contact under company C")
 
-        # Company A sends one message to a channel involving A/B/C participants.
+        # ── Step 3: create a channel spanning all three companies ─────────────
         channel_name = "EADU Three Companies Channel"
         channel_a = self.env["discuss.channel"].with_user(self.user_a).create(
             {
@@ -315,6 +384,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         body = "Message sent from company A to B and C"
         channel_a.with_user(self.user_a).message_post(body=body)
 
+        # ── Step 4: verify fan-out: 3 channel copies, 2 mirrored messages ─────
         # With 3 companies in the exchange graph, we expect 3 discuss channels
         # in total: original + one mirrored copy per remote company.
         all_channels = self.env["discuss.channel"].sudo().search([("name", "=", channel_name)])
@@ -364,13 +434,12 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
 
         channel_b = self.env["discuss.channel"].browse(mapping_a_to_b.eadu_ident)
         channel_c = self.env["discuss.channel"].browse(mapping_a_to_c.eadu_ident)
-        self.assertTrue(channel_b in all_channels)
-        self.assertTrue(channel_c in all_channels)
+        self.assertTrue(channel_b in all_channels, "B's channel should be among the three")
+        self.assertTrue(channel_c in all_channels, "C's channel should be among the three")
 
-        
-        # Post from company C mirror and ensure fan-out to all channel copies.
-        # Prefer a user with mail.message create access for channel posting,
-        # then fallback to C's EADU portal user and finally any member user.
+        # ── Step 5: reply from C and verify relay back to A and B ─────────────
+        # Post from company C's mirror; the master (A) should relay it to B.
+        # Prefer a regular internal user for the post so access rights are broad.
         company_c_sender = channel_c.channel_partner_ids.user_ids.filtered(
             lambda u: u.has_group("base.group_user")
         )[:1]
@@ -422,11 +491,8 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
     # ── Queue / retry tests ───────────────────────────────────────────────────
 
     def _do_ab_exchange(self):
-        """Perform the A ↔ B exchange and return the channel in A."""
-        exchange_token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
-        self.partner_b.with_user(self.user_b).write({"eadu_exchanged": exchange_token})
-        self.partner_b.with_user(self.user_b).button_process_eadu_exchanged()
-
+        """Perform the A ↔ B exchange and return (alice_contact_a, bob_contact_a)."""
+        self._do_exchange(self.partner_a, self.user_a, self.partner_b, self.user_b)
         alice_contact_a = self.user_a.partner_id
         bob_contact_a = self.partner_a.child_ids.filtered(
             lambda p: p.name == self.user_b.name and p.type == "contact"
@@ -443,7 +509,6 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         alice_contact_a, bob_contact_a = self._do_ab_exchange()
         # The eadu contact A uses when calling B (child of partner_a pointing at B's URL).
         eadu_contact_a_to_b = self.partner_a._get_eadu_partner()
-        eadu_contact_b = self.partner_b._get_eadu_partner()
 
         channel_name = "Queue Retry Test Channel A-B"
         channel_a = self.env["discuss.channel"].with_user(self.user_a).create(
@@ -531,36 +596,15 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         queued for C while B receives them normally.  After retry, C also
         receives all missing messages in order.
         """
-        # ── Setup: exchange A↔B and A↔C ──────────────────────────────────────
-        company_c = self.ResCompany.create({"name": "EADU Test Company C (retry)"})
-        partner_c = self.ResPartner.create(
-            {
-                "name": "DB C (retry)",
-                "company_type": "company",
-                "company_id": company_c.id,
-            }
+        # ── Setup: add company C and exchange A↔B, A↔C ───────────────────────
+        _company_c, partner_c, user_c = self._create_company_with_user(
+            company_name="EADU Test Company C (retry)",
+            db_name="DB C (retry)",
+            user_name="Carol C (retry)",
+            login="carol_c_retry_eadu_test",
         )
-        group_user = self.env.ref("base.group_user")
-        group_partner_manager = self.env.ref("base.group_partner_manager")
-        group_system = self.env.ref("base.group_system")
-        user_c = self.ResUsers.create(
-            {
-                "name": "Carol C (retry)",
-                "login": "carol_c_retry_eadu_test",
-                "email": "carol_c_retry@example.com",
-                "company_id": company_c.id,
-                "company_ids": [(6, 0, [company_c.id])],
-                "group_ids": [(6, 0, [group_user.id, group_partner_manager.id, group_system.id])],
-            }
-        )
-
-        exchange_token_ab = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
-        self.partner_b.with_user(self.user_b).write({"eadu_exchanged": exchange_token_ab})
-        self.partner_b.with_user(self.user_b).button_process_eadu_exchanged()
-
-        exchange_token_ac = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
-        partner_c.with_user(user_c).write({"eadu_exchanged": exchange_token_ac})
-        partner_c.with_user(user_c).button_process_eadu_exchanged()
+        self._do_exchange(self.partner_a, self.user_a, self.partner_b, self.user_b)
+        self._do_exchange(self.partner_a, self.user_a, partner_c, user_c)
 
         alice_contact_b = self.partner_b.child_ids.filtered(
             lambda p: p.name == self.user_a.name and p.type == "contact"
@@ -656,4 +700,113 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             [("res_id", "=", channel_c.id), ("body", "ilike", body_queued_2)], limit=1
         )
         self.assertLess(msg_c_1.id, msg_c_2.id, "Messages should arrive at C in send order")
+
+    # ── Additional tests ──────────────────────────────────────────────────────
+
+    def test_exchange_idempotent(self):
+        """
+        Performing the exchange a second time must not create duplicate EADU
+        child contacts or portal users on either side.
+
+        The first exchange creates one EADU child contact per partner.
+        The second exchange should reuse those existing records rather than
+        creating new ones.
+        """
+        # First exchange.
+        self._do_exchange(self.partner_a, self.user_a, self.partner_b, self.user_b)
+
+        eadu_children_a_before = self.partner_a.child_ids.filtered(lambda p: p.eadu_url)
+        eadu_children_b_before = self.partner_b.child_ids.filtered(lambda p: p.eadu_url)
+        self.assertEqual(len(eadu_children_a_before), 1,
+                         "Exactly one EADU child contact should exist on A after first exchange")
+        self.assertEqual(len(eadu_children_b_before), 1,
+                         "Exactly one EADU child contact should exist on B after first exchange")
+
+        # Second exchange (A generates a fresh token, B processes it again).
+        self._do_exchange(self.partner_a, self.user_a, self.partner_b, self.user_b)
+
+        eadu_children_a_after = self.partner_a.child_ids.filtered(lambda p: p.eadu_url)
+        eadu_children_b_after = self.partner_b.child_ids.filtered(lambda p: p.eadu_url)
+        self.assertEqual(
+            len(eadu_children_a_after), 1,
+            "Second exchange must not create a second EADU child contact on A",
+        )
+        self.assertEqual(
+            len(eadu_children_b_after), 1,
+            "Second exchange must not create a second EADU child contact on B",
+        )
+
+        # Each EADU child contact must have exactly one portal user.
+        portal_users_a = eadu_children_a_after.user_ids.filtered(
+            lambda u: u.has_group("eadu.group_portal_eadu")
+        )
+        portal_users_b = eadu_children_b_after.user_ids.filtered(
+            lambda u: u.has_group("eadu.group_portal_eadu")
+        )
+        self.assertEqual(len(portal_users_a), 1,
+                         "A's EADU contact must have exactly one portal user after two exchanges")
+        self.assertEqual(len(portal_users_b), 1,
+                         "B's EADU contact must have exactly one portal user after two exchanges")
+
+    def test_rewrite_oe_links_remaps_known_ids(self):
+        """
+        After an exchange, ``_rewrite_oe_links`` replaces ``data-oe-id``
+        attribute values in message bodies with the remote counterpart ids
+        recorded in ``eadu.partner.any``.
+        """
+        self._do_exchange(self.partner_a, self.user_a, self.partner_b, self.user_b)
+
+        # Find the eadu.partner.any record for user_a's partner on B's side.
+        eadu_contact_b = self.partner_a._get_eadu_partner()
+        mapping = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_b.id),
+            ("res_model", "=", "res.partner"),
+            ("res_id", "=", self.user_a.partner_id.id),
+        ], limit=1)
+        self.assertTrue(
+            mapping,
+            "Exchange should have created a res.partner mapping for user A on B's eadu contact",
+        )
+        self.assertTrue(
+            mapping.eadu_ident,
+            "Mapping must have a non-zero eadu_ident before testing link rewriting",
+        )
+
+        local_id = self.user_a.partner_id.id
+        remote_id = mapping.eadu_ident
+
+        # Build a minimal chatter body referencing user_a's partner by local id.
+        body = (
+            f'<a data-oe-model="res.partner" data-oe-id="{local_id}">'
+            f'Alice</a>'
+        )
+
+        rewritten = self.env["mail.message"].sudo()._rewrite_oe_links(body, eadu_contact_b)
+
+        self.assertIn(
+            f'data-oe-id="{remote_id}"',
+            rewritten,
+            "_rewrite_oe_links should replace the local id with the remote eadu_ident",
+        )
+        self.assertNotIn(
+            f'data-oe-id="{local_id}"',
+            rewritten,
+            "_rewrite_oe_links should not leave the original local id in the rewritten body",
+        )
+
+    def test_malformed_exchange_token_raises(self):
+        """
+        Processing a corrupt or incomplete exchange token must raise an
+        exception before any partner records or users are created.
+        """
+        malformed_tokens = [
+            "not-valid-base64!!!",
+            base64.b64encode(b"too-few-fields").decode(),  # valid base64 but missing # segments
+            "",
+        ]
+        for token in malformed_tokens:
+            self.partner_b.eadu_exchanged = token
+            with self.assertRaises(Exception,
+                                   msg=f"Should raise for malformed token: {token!r}"):
+                self.partner_b.with_user(self.user_b).button_process_eadu_exchanged()
 

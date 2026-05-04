@@ -1,15 +1,117 @@
-Eadu is like the e- version of communication between Odoo instances.  
+Eadu is like the e- version of communication between Odoo instances.
 
-Right now, people have to open mails, go to the portal of the other Odoo instance, 
-while they should be able to see all communication from their partners that 
-also use Odoo in their own instance.  
+Right now, people have to open mails, go to the portal of the other Odoo instance,
+while they should be able to see all communication from their partners that
+also use Odoo in their own instance.
 
-This is still Proof of Concept /  Research phase. (the name is just for fun)
-First video in eadudemo1.webm
+This is still Proof of Concept / Research phase. (the name is just for fun)
 
-To run the 2 instances like in the video, you can do: (if eadu is placed next to the odoo repo)
+To run the 2 instances, you can do: (if eadu is placed next to the odoo repo)
 
 ./odoo-bin --addons="../eadu,addons" -d eadu -i eadu
 
 ./odoo-bin --addons="../eadu,addons" -d jedha -i eadu -p 8070
+
+
+Goal
+----
+
+The goal of Eadu is to check what the advantages are of synchronizing data between
+different Odoo instances instead of using the portal, mails or external systems.
+
+
+Connecting two instances
+------------------------
+
+When you want to connect to another Odoo instance, you do it through its partner form.
+You let it generate a token and you pass that token to someone in the other instance.
+He will have a partner form of you and he can enter the token.
+(this flow can still be improved upon)
+
+Automatically the two instances communicate:
+
+- A portal user is created on each side.
+- The partner linked to that user is a child contact of the original partner and it also
+  holds the credentials of the portal user in the other instance.
+- Those Eadu portal users are portal users with extended portal-user rights.
+- If there is no child contact yet for the users that exchanged the tokens, a child
+  contact is created for them as well.
+- This way, those two can already talk to each other in Discuss.
+
+
+Architecture
+------------
+
+There is one central model: **eadu.partner.any** with the fields
+``partner_id`` (eadu partner), ``res_model``, ``res_id``, and ``eadu_ident``.
+It expresses: "this model/id in my database corresponds to that id (eadu_ident)
+in the database of the eadu partner (the other Odoo instance)."
+
+It is also used for security: an Eadu portal user gets extra access rights based on the
+models that have been shared.
+(Open question: should we also grant write access here?)
+
+A ``pending_calls`` JSON field on the same model handles the case where calls cannot be
+delivered immediately. The calls are stored and replayed when the cron runs or the
+connection is restored.
+
+
+The three-body problem
+----------------------
+
+What happens when a Discuss channel involves partners from multiple Odoo instances
+(multiple Eadu partners)?
+
+The solution is to acknowledge the original creator of the channel as the *master*
+(tracked by a ``master_status`` field on ``eadu.partner.any``).
+Messages flow through the master, which then fans them out to all other instances.
+
+
+Rich-text links
+---------------
+
+In the chatter you can link to any object in a message — a product, an attachment,
+another partner, etc.
+When such a message is sent through a channel and arrives in another Odoo instance,
+the link is rewritten to contain the correct id in that instance.
+That way the link resolves correctly regardless of which database is viewing it.
+
+
+Testing strategy
+----------------
+
+Because the tests run inside a single Odoo database, actual HTTP calls between
+instances are not possible.  Instead, ``res.partner._eadu_call`` is patched with
+a mock that intercepts every outgoing RPC and routes it locally.
+
+The mock resolves the portal API key stored on the calling Eadu contact to the
+corresponding ``res.users`` record in the same database, then dispatches the call
+under that user's access rights.  This exercises the full application code path
+— access control, ``eadu.partner.any`` lookups, queue logic — without any network
+dependency.
+
+Each "remote instance" in the tests is represented by a separate ``res.company``
+inside the same database.  When the top-level partner that holds the Eadu contact
+has a ``company_id`` set, records created through the Eadu flow (contacts, users,
+mappings) are scoped to that company, making the two companies behave like two
+independent Odoo instances.
+
+This trick works well for models that carry a ``company_id`` field, such as
+``product.product``.  It does not work for ``discuss.channel``, which has no
+``company_id``, so channel mirroring in the tests produces a second channel record
+in the same database rather than in a genuinely separate company scope.  The
+functional behaviour is still correctly tested; the separation is just logical
+rather than company-scoped for that model.
+
+To simulate a connection failure, a test adds the Eadu contact's id to a
+``_blocked_partners`` set before the relevant call.  The mock then raises
+``EaduConnectionError``, triggering the queue path.  After the block is removed,
+``_retry_all_queued_calls()`` is called to verify that queued messages are
+delivered in the correct order and the queue is cleared.
+
+To run the tests:
+
+./odoo-bin --addons="../eadu,addons" -d eadu --test-tags eadu -u eadu after installation
+
+
 
