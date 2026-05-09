@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <!--
+        Suggestion row for /product: mentions.
+        Receives: option = { label, _oeId, _oeModel, classList }
+    -->
+    <t t-name="eadu_product.Composer.suggestionProductMention">
+        <div class="o-mail-Composer-suggestion d-flex align-items-center px-2 py-1 gap-2">
+            <i class="fa fa-cube text-muted" aria-hidden="true"/>
+            <span t-esc="option.label"/>
+        </div>
+    </t>
+
+</templates>

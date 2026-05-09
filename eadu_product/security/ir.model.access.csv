@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_eadu_product_user,eadu.product user,eadu_product.model_eadu_product,base.group_user,1,1,1,1
+access_eadu_product_portal_eadu,eadu.product portal eadu,eadu_product.model_eadu_product,eadu.group_portal_eadu,1,1,1,0

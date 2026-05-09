@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ── List view ────────────────────────────────────────────────────── -->
+    <record id="eadu_product_list_view" model="ir.ui.view">
+        <field name="name">eadu.product.list</field>
+        <field name="model">eadu.product</field>
+        <field name="arch" type="xml">
+            <list string="Imported Products" editable="top"
+                  decoration-muted="state == 'linked'">
+                <field name="partner_id" optional="show"/>
+                <field name="name"/>
+                <field name="barcode" optional="show"/>
+                <field name="default_code" optional="show"/>
+                <field name="standard_price" optional="hide"/>
+                <field name="suggested_product_id" readonly="1" optional="show"/>
+                <field name="product_id" optional="show"/>
+                <field name="state" optional="show"/>
+                <button name="action_create_product"
+                        string="Create Product"
+                        type="object"
+                        icon="fa-plus-circle"
+                        invisible="state == 'linked'"
+                        title="Create a new local product from the imported data"/>
+                <button name="action_link_product"
+                        string="Link"
+                        type="object"
+                        icon="fa-link"
+                        invisible="state == 'linked' or not product_id"
+                        title="Link to the selected local product"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- ── Form view ────────────────────────────────────────────────────── -->
+    <record id="eadu_product_form_view" model="ir.ui.view">
+        <field name="name">eadu.product.form</field>
+        <field name="model">eadu.product</field>
+        <field name="arch" type="xml">
+            <form string="Imported Product">
+                <header>
+                    <button name="action_create_product"
+                            string="Create Product"
+                            type="object"
+                            class="oe_highlight"
+                            invisible="state == 'linked'"/>
+                    <button name="action_link_product"
+                            string="Link to Selected Product"
+                            type="object"
+                            class="oe_highlight"
+                            invisible="state == 'linked' or not product_id"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Remote Origin">
+                            <field name="partner_id"/>
+                            <field name="eadu_ident"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group string="Remote Product Data">
+                            <field name="name"/>
+                            <field name="barcode"/>
+                            <field name="default_code"/>
+                            <field name="standard_price"/>
+                        </group>
+                    </group>
+                    <group string="Local Mapping">
+                        <field name="suggested_product_id" readonly="1"/>
+                        <field name="product_id"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ── Search view ──────────────────────────────────────────────────── -->
+    <record id="eadu_product_search_view" model="ir.ui.view">
+        <field name="name">eadu.product.search</field>
+        <field name="model">eadu.product</field>
+        <field name="arch" type="xml">
+            <search string="Imported Products">
+                <field name="name"/>
+                <field name="barcode"/>
+                <field name="partner_id"/>
+                <field name="product_id"/>
+                <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
+                <filter string="Linked" name="linked" domain="[('state','=','linked')]"/>
+                <separator/>
+                <filter string="Eadu Partner" name="group_partner" context="{'group_by': 'partner_id'}"/>
+                <filter string="State" name="group_state" context="{'group_by': 'state'}"/>
+            </search>
+        </field>
+    </record>
+
+    <!-- ── Action ───────────────────────────────────────────────────────── -->
+    <record id="action_eadu_product" model="ir.actions.act_window">
+        <field name="name">Imported Products</field>
+        <field name="res_model">eadu.product</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_pending': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No imported products yet.
+            </p>
+            <p>
+                Products pushed from an Eadu partner database will appear here.
+                You can then create a new local product or link them to an existing one.
+            </p>
+        </field>
+    </record>
+
+    <!-- ── Server action: push products to Eadu ─────────────────────── -->
+    <record id="action_eadu_push_products" model="ir.actions.server">
+        <field name="name">Push to Eadu Partners</field>
+        <field name="model_id" ref="product.model_product_template"/>
+        <field name="binding_model_id" ref="product.model_product_template"/>
+        <field name="binding_view_types">list</field>
+        <field name="state">code</field>
+        <field name="code">action = records.action_eadu_push()</field>
+    </record>
+
+    <!-- ── Menu ─────────────────────────────────────────────────────────── -->
+    <menuitem id="menu_eadu_root"
+              name="Eadu"
+              sequence="99"/>
+
+    <menuitem id="menu_eadu_products"
+              name="Imported Products"
+              parent="menu_eadu_root"
+              action="action_eadu_product"
+              sequence="10"/>
+
+</odoo>
