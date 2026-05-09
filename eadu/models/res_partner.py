@@ -4,11 +4,14 @@ import requests
 import base64
 import odoo
 import threading
+import logging
 
 from odoo import api, fields, models, Command, _
 from odoo.addons.mail.tools.discuss import Store
 
 from odoo.addons.eadu.exceptions import EaduConnectionError
+
+_logger = logging.getLogger(__name__)
 
 
 class ResPartner(models.Model):
@@ -224,12 +227,17 @@ class ResPartner(models.Model):
             )
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.Timeout as exc:
-            raise EaduConnectionError(f"Timeout calling {url}") from exc
-        except requests.exceptions.ConnectionError as exc:
-            raise EaduConnectionError(f"Connection error calling {url}") from exc
-        except requests.exceptions.HTTPError as exc:
-            raise EaduConnectionError(f"HTTP error calling {url}: {exc}") from exc
+        except requests.exceptions.RequestException as exc:
+            _logger.exception(
+                "eadu: _eadu_call to %s failed with exception", url
+            )
+            if isinstance(exc, requests.exceptions.Timeout):
+                raise EaduConnectionError(f"Timeout calling {url}") from exc
+            if isinstance(exc, requests.exceptions.ConnectionError):
+                raise EaduConnectionError(f"Connection error calling {url}") from exc
+            if isinstance(exc, requests.exceptions.HTTPError):
+                raise EaduConnectionError(f"HTTP error calling {url}: {exc.response.status_code} {exc.response.reason}") from exc
+            raise EaduConnectionError(f"Request exception calling {url}") from exc
 
     @api.readonly
     @api.model

@@ -3,7 +3,6 @@ from . import eadu_partner_any
 from . import res_users
 from . import mail_message
 from . import discuss_channel
-from . import eadu_rtc_link
 from . import discuss_channel_rtc_session
 from . import ir_attachment
 from . import mail_message_reaction
