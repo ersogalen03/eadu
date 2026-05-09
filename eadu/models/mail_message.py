@@ -9,6 +9,18 @@ import re
 class MailMessage(models.Model):
     _inherit = "mail.message"
 
+    def _is_eadu_internal_notification_body(self, body):
+        if not body:
+            return False
+        body = str(body)
+        return "o_mail_notification" in body or re.search(r"\bdata-oe-type=", body)
+
+    def _is_eadu_internal_notification_message(self, message, body):
+        return (
+            message.message_type == "notification"
+            and self._is_eadu_internal_notification_body(body)
+        )
+
     def _convert_model(self, model, res_id):
         return model, res_id
 
@@ -148,6 +160,9 @@ class MailMessage(models.Model):
             model = val.get('model')
             res_id = val.get('res_id')
             result = False
+            if self._is_eadu_internal_notification_message(created_record, body):
+                recs += created_record
+                continue
             if body and model and res_id:
                 partner_group, result = self._handle_eadu_msg(model, res_id, body)
                 if result and partner_group:
@@ -233,6 +248,8 @@ class MailMessage(models.Model):
         if not eadu_contact.eadu_url:
             raise
 
+        if self._is_eadu_internal_notification_body(body):
+            return {'message_id': False}
 
         vals = {
             'body': Markup(body),
