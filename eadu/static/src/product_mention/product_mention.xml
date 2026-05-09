@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+    <!--
+        Entry in the "/" command palette for any eadu virtual command.
+        Receives: option = { label, help, _eadu, classList }
+    -->
+    <t t-name="eadu.Composer.suggestionEaduCommand">
+        <strong class="px-2 py-1 align-self-center flex-shrink-0 text-truncate">
+            <i class="fa fa-plug me-1 text-muted" aria-hidden="true"/>
+            <t t-esc="option.label"/>
+        </strong>
+        <span class="text-600 text-truncate align-self-center">
+            <t t-esc="option.help"/>
+        </span>
+    </t>
+
+    <!--
+        Suggestion row for /partner: mentions.
+        Receives: option = { label, _oeId, _oeModel, classList }
+    -->
+    <t t-name="eadu.Composer.suggestionPartnerMention">
+        <div class="o-mail-Composer-suggestion d-flex align-items-center px-2 py-1 gap-2">
+            <i class="fa fa-user text-muted" aria-hidden="true"/>
+            <span t-esc="option.label"/>
+        </div>
+    </t>
+
+    <!--
+        Suggestion row for /attachment: mentions.
+        Receives: option = { label, mimetype, _oeId, _oeModel, classList }
+    -->
+    <t t-name="eadu.Composer.suggestionAttachmentMention">
+        <div class="o-mail-Composer-suggestion d-flex align-items-center px-2 py-1 gap-2">
+            <i class="fa fa-paperclip text-muted" aria-hidden="true"/>
+            <span t-esc="option.label"/>
+        </div>
+    </t>
+
+</templates>
