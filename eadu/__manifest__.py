@@ -22,6 +22,8 @@ On the partner fill in his URL and your id in his db.
         'web.assets_backend': [
             # Clean stale Discuss RTC localStorage values before mail models compute.
             'eadu/static/src/rtc/eadu_rtc_storage_sanitize.js',
+            # Cross-DB RTC can expose mirrored sessions before P2P transceivers exist.
+            'eadu/static/src/rtc/eadu_peer_to_peer_transceiver_patch.js',
             # Core registry + suggestion service/hook/composer patches
             'eadu/static/src/mention/eadu_mention_registry.js',
             'eadu/static/src/mention/eadu_mention_core.js',

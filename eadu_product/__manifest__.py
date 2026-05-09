@@ -4,10 +4,10 @@
     'name': "Eadu Product",
     'summary': "Bridge between Eadu and the standard Odoo product module",
     'description': """
-Products imported from another Eadu database land in the eadu.product queue first.
-The system auto-suggests a matching local product.product based on barcode or name.
-From the list view the user can either create a new product or link to an existing one.
-Linking creates a product.supplierinfo and eadu.partner.any records on both sides.
+Products imported from another Eadu database are synchronized directly as native
+product.product records. Exact barcode matches are linked automatically; uncertain
+imports stay inactive and marked for review. The publisher's sale price becomes a
+product.supplierinfo vendor price for the receiver.
     """,
     'category': 'Eadu',
     'version': '0.1',
@@ -17,7 +17,6 @@ Linking creates a product.supplierinfo and eadu.partner.any records on both side
     ],
     'data': [
         'security/ir.model.access.csv',
-        'security/ir_rule.xml',
         'views/eadu_product_views.xml',
     ],
     'assets': {

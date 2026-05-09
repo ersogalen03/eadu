@@ -1,116 +1,80 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-    <!-- ── List view ────────────────────────────────────────────────────── -->
-    <record id="eadu_product_list_view" model="ir.ui.view">
-        <field name="name">eadu.product.list</field>
-        <field name="model">eadu.product</field>
+    <record id="eadu_product_product_form_view" model="ir.ui.view">
+        <field name="name">product.product.form.eadu.catalog</field>
+        <field name="model">product.product</field>
+        <field name="inherit_id" ref="product.product_normal_form_view"/>
         <field name="arch" type="xml">
-            <list string="Imported Products" editable="top"
-                  decoration-muted="state == 'linked'">
-                <field name="partner_id" optional="show"/>
-                <field name="name"/>
-                <field name="barcode" optional="show"/>
-                <field name="default_code" optional="show"/>
-                <field name="standard_price" optional="hide"/>
-                <field name="suggested_product_id" readonly="1" optional="show"/>
-                <field name="product_id" optional="show"/>
-                <field name="state" optional="show"/>
-                <button name="action_create_product"
-                        string="Create Product"
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_eadu_open_merge_wizard"
                         type="object"
-                        icon="fa-plus-circle"
-                        invisible="state == 'linked'"
-                        title="Create a new local product from the imported data"/>
-                <button name="action_link_product"
-                        string="Link"
-                        type="object"
-                        icon="fa-link"
-                        invisible="state == 'linked' or not product_id"
-                        title="Link to the selected local product"/>
-            </list>
+                        class="oe_stat_button"
+                        icon="fa-random"
+                        invisible="not eadu_catalog or eadu_merge_state not in ('needs_review', 'auto_linked')">
+                    <div class="o_field_widget o_stat_info">
+                        <span class="o_stat_text">Merge EADU</span>
+                    </div>
+                </button>
+            </xpath>
+            <xpath expr="//notebook" position="inside">
+                <page string="EADU" invisible="not eadu_catalog">
+                    <group>
+                        <group>
+                            <field name="eadu_catalog"/>
+                            <field name="eadu_merge_state"/>
+                            <field name="eadu_origin_partner_id"/>
+                            <field name="eadu_origin_ident"/>
+                        </group>
+                        <group>
+                            <field name="eadu_remote_barcode"/>
+                            <field name="eadu_remote_sale_price"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="eadu_review_reason" nolabel="1"/>
+                    </group>
+                </page>
+            </xpath>
         </field>
     </record>
 
-    <!-- ── Form view ────────────────────────────────────────────────────── -->
-    <record id="eadu_product_form_view" model="ir.ui.view">
-        <field name="name">eadu.product.form</field>
-        <field name="model">eadu.product</field>
+    <record id="eadu_product_merge_wizard_view_form" model="ir.ui.view">
+        <field name="name">eadu.product.merge.wizard.form</field>
+        <field name="model">eadu.product.merge.wizard</field>
         <field name="arch" type="xml">
-            <form string="Imported Product">
-                <header>
-                    <button name="action_create_product"
-                            string="Create Product"
-                            type="object"
-                            class="oe_highlight"
-                            invisible="state == 'linked'"/>
-                    <button name="action_link_product"
-                            string="Link to Selected Product"
-                            type="object"
-                            class="oe_highlight"
-                            invisible="state == 'linked' or not product_id"/>
-                    <field name="state" widget="statusbar"/>
-                </header>
-                <sheet>
-                    <group>
-                        <group string="Remote Origin">
-                            <field name="partner_id"/>
-                            <field name="eadu_ident"/>
-                            <field name="company_id" groups="base.group_multi_company"/>
-                        </group>
-                        <group string="Remote Product Data">
-                            <field name="name"/>
-                            <field name="barcode"/>
-                            <field name="default_code"/>
-                            <field name="standard_price"/>
-                        </group>
-                    </group>
-                    <group string="Local Mapping">
-                        <field name="suggested_product_id" readonly="1"/>
-                        <field name="product_id"/>
-                    </group>
-                </sheet>
+            <form string="Merge EADU Product">
+                <group>
+                    <field name="source_product_id" readonly="1"/>
+                    <field name="target_product_id"/>
+                    <field name="move_supplierinfo"/>
+                    <field name="copy_barcode"/>
+                </group>
+                <footer>
+                    <button name="action_merge" type="object" string="Merge" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
             </form>
         </field>
     </record>
 
-    <!-- ── Search view ──────────────────────────────────────────────────── -->
-    <record id="eadu_product_search_view" model="ir.ui.view">
-        <field name="name">eadu.product.search</field>
-        <field name="model">eadu.product</field>
-        <field name="arch" type="xml">
-            <search string="Imported Products">
-                <field name="name"/>
-                <field name="barcode"/>
-                <field name="partner_id"/>
-                <field name="product_id"/>
-                <filter string="Pending" name="pending" domain="[('state','=','pending')]"/>
-                <filter string="Linked" name="linked" domain="[('state','=','linked')]"/>
-                <separator/>
-                <filter string="Eadu Partner" name="group_partner" context="{'group_by': 'partner_id'}"/>
-                <filter string="State" name="group_state" context="{'group_by': 'state'}"/>
-            </search>
-        </field>
-    </record>
-
-    <!-- ── Action ───────────────────────────────────────────────────────── -->
     <record id="action_eadu_product" model="ir.actions.act_window">
-        <field name="name">Imported Products</field>
-        <field name="res_model">eadu.product</field>
+        <field name="name">EADU Catalog Products</field>
+        <field name="res_model">product.product</field>
         <field name="view_mode">list,form</field>
-        <field name="context">{'search_default_pending': 1}</field>
+        <field name="domain">[('eadu_catalog', '=', True)]</field>
+        <field name="context">{'active_test': False}</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
-                No imported products yet.
+                No EADU catalog products yet.
             </p>
             <p>
-                Products pushed from an Eadu partner database will appear here.
-                You can then create a new local product or link them to an existing one.
+                Products pushed from an EADU partner database are native Odoo
+                products. Uncertain imports stay inactive until reviewed or merged.
             </p>
         </field>
     </record>
 
-    <!-- ── Server action: push products to Eadu ─────────────────────── -->
     <record id="action_eadu_push_products" model="ir.actions.server">
         <field name="name">Push to Eadu Partners</field>
         <field name="model_id" ref="product.model_product_template"/>
@@ -120,13 +84,12 @@
         <field name="code">action = records.action_eadu_push()</field>
     </record>
 
-    <!-- ── Menu ─────────────────────────────────────────────────────────── -->
     <menuitem id="menu_eadu_root"
               name="Eadu"
               sequence="99"/>
 
     <menuitem id="menu_eadu_products"
-              name="Imported Products"
+              name="Catalog Products"
               parent="menu_eadu_root"
               action="action_eadu_product"
               sequence="10"/>

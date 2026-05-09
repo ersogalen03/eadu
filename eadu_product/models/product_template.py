@@ -8,7 +8,7 @@ class ProductTemplate(models.Model):
     _inherit = 'product.template'
 
     def action_eadu_push(self):
-        """Push selected products to all connected Eadu partners of the current company."""
+        """Push selected variants to connected Eadu partners as native products."""
         eadu_contacts = self.env['res.partner'].sudo().search([
             ('eadu_url', '!=', False),
         ])
@@ -29,12 +29,13 @@ class ProductTemplate(models.Model):
             for product in tmpl.product_variant_ids:
                 for contact in eadu_contacts:
                     try:
-                        contact._eadu_call('eadu.product', 'action_eadu_import_product', {
+                        contact._eadu_call('product.product', 'action_eadu_import_product', {
                             'eadu_ident': product.id,
                             'name': product.name,
                             'barcode': product.barcode or None,
                             'default_code': product.default_code or None,
-                            'standard_price': product.standard_price,
+                            'sale_price': product.lst_price,
+                            'currency_id': product.currency_id.id if product.currency_id else None,
                         })
                         pushed += 1
                     except EaduConnectionError:

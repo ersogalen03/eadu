@@ -1,24 +1,4 @@
 # Part of Eadu. See LICENSE file for full copyright and licensing details.
-"""
-Tests for the eadu_product module.
-
-Two companies (A and B) simulate two separate Odoo instances connected via Eadu.
-The test shares the multicompany mock infrastructure from the base eadu module:
-_eadu_call is patched so that cross-company RPC calls are routed locally using
-the portal API key stored on the eadu contact.
-
-Test scenarios
---------------
-1. test_create_product
-   B pushes a product to A (via action_eadu_import_product).
-   A creates a new product with action_create_product.
-   Verified: product.supplierinfo, eadu.partner.any on BOTH sides, state=linked.
-
-2. test_link_existing_product
-   B pushes a product to A.
-   A already has a matching local product; A sets product_id and calls action_link_product.
-   Verified: same set of records as above.
-"""
 
 from unittest.mock import patch
 
@@ -30,7 +10,6 @@ from odoo.addons.eadu.models import res_partner as res_partner_model
 
 @tagged("post_install", "-at_install")
 class TestEaduProduct(common.TransactionCase):
-    # ── Test fixtures ─────────────────────────────────────────────────────
 
     def setUp(self):
         super().setUp()
@@ -38,11 +17,9 @@ class TestEaduProduct(common.TransactionCase):
         self.ResPartner = self.env["res.partner"].sudo()
         self.ResUsers = self.env["res.users"].sudo()
 
-        # Two companies representing two independent Odoo instances.
         self.company_a = self.ResCompany.create({"name": "EADU Prod Test Company A"})
         self.company_b = self.ResCompany.create({"name": "EADU Prod Test Company B"})
 
-        # One top-level partner per company that represents the remote database.
         self.partner_a = self.ResPartner.create({
             "name": "DB-A",
             "company_type": "company",
@@ -75,7 +52,6 @@ class TestEaduProduct(common.TransactionCase):
             "group_ids": [(6, 0, [group_user.id, group_pm.id, group_sys.id])],
         })
 
-        # Patch _eadu_call to route calls locally via the portal API key.
         self._blocked_partners = set()
         self._eadu_call_patcher = patch.object(
             res_partner_model.ResPartner,
@@ -86,22 +62,15 @@ class TestEaduProduct(common.TransactionCase):
         self._eadu_call_patcher.start()
         self.addCleanup(self._eadu_call_patcher.stop)
 
-        # Perform the Eadu exchange so both sides have portal users + API keys.
         self._do_exchange()
 
-    # ── Mock helpers ──────────────────────────────────────────────────────
-
     def _get_eadu_portal_user_from_apikey(self, eadu_contact):
-        if not eadu_contact.eadu_apikey:
-            raise AssertionError("Missing eadu_apikey on eadu contact")
         user_id = self.env["res.users.apikeys"].sudo()._check_credentials(
             scope="rpc", key=eadu_contact.eadu_apikey,
         )
-        if not user_id:
-            raise AssertionError("No user found for eadu_apikey")
+        self.assertTrue(user_id, "No user found for eadu_apikey")
         eadu_user = self.ResUsers.browse(user_id)
-        if not eadu_user.has_group("eadu.group_portal_eadu"):
-            raise AssertionError("Resolved user is not in eadu.group_portal_eadu")
+        self.assertTrue(eadu_user.has_group("eadu.group_portal_eadu"))
         return eadu_user
 
     def _local_cross_company_call(self, eadu_contact, model, method, params):
@@ -114,210 +83,211 @@ class TestEaduProduct(common.TransactionCase):
             raise EaduConnectionError("mocked connection failure")
         return self._local_cross_company_call(eadu_contact, model, method, params)
 
-    # ── Exchange helper ───────────────────────────────────────────────────
-
     def _do_exchange(self):
-        """Perform the Eadu exchange so both companies are fully connected."""
         exchange_token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
         partner_b_as_b = self.partner_b.with_user(self.user_b)
         partner_b_as_b.eadu_exchanged = exchange_token
         partner_b_as_b.button_process_eadu_exchanged()
 
-    # ── Product push helper ───────────────────────────────────────────────
-
-    def _create_product_in_b(self, name, barcode=None, default_code=None,
-                              standard_price=0.0):
-        """
-        Create a product in company B and push it to company A via the
-        action_eadu_import_product endpoint, returning (eadu_product_a, product_b).
-        """
-        product_b = self.env['product.product'].sudo().create({
+    def _create_product_in_b(self, name, barcode=None, default_code=None, list_price=0.0):
+        return self.env['product.product'].sudo().create({
             'name': name,
             'barcode': barcode,
             'default_code': default_code,
-            'standard_price': standard_price,
+            'list_price': list_price,
             'company_id': self.company_b.id,
         })
 
-        # B's eadu contact (the child of partner_b that has eadu_url pointing to A).
+    def _push_product_to_a(self, product_b, **overrides):
         eadu_child_b = self.partner_b._get_eadu_partner()
         self.assertTrue(eadu_child_b, "B must have an eadu contact after exchange")
-
-        # B pushes the product to A.  The mock routes this as A's portal user for B,
-        # so action_eadu_import_product will store partner_id = A's eadu child.
+        params = {
+            'eadu_ident': product_b.id,
+            'name': product_b.name,
+            'barcode': product_b.barcode or None,
+            'default_code': product_b.default_code or None,
+            'sale_price': product_b.lst_price,
+            'currency_id': product_b.currency_id.id if product_b.currency_id else None,
+        }
+        params.update(overrides)
         result = eadu_child_b._eadu_call(
-            'eadu.product',
+            'product.product',
             'action_eadu_import_product',
-            {
-                'eadu_ident': product_b.id,
-                'name': name,
-                'barcode': barcode,
-                'default_code': default_code,
-                'standard_price': standard_price,
-            },
+            params,
         )
-        eadu_product_a = self.env['eadu.product'].sudo().browse(result['result'])
-        self.assertTrue(eadu_product_a.exists(), "eadu.product should have been created on A's side")
-        return eadu_product_a, product_b
+        product_a = self.env['product.product'].sudo().with_context(active_test=False).browse(result['result'])
+        self.assertTrue(product_a.exists(), "Native product.product should be returned")
+        return product_a
 
-    # ── Shared assertion helper ───────────────────────────────────────────
-
-    def _assert_linked(self, eadu_product_a, product_b, local_product):
-        """
-        Assert all expected records exist on both sides after a successful link.
-
-        eadu_product_a  : the eadu.product record on A's side
-        product_b       : the product.product in company B
-        local_product   : the product.product created/linked in company A
-        """
-        EaduAny = self.env['eadu.partner.any'].sudo()
+    def _assert_product_mapping(self, product_a, product_b, state='partner'):
         eadu_child_a = self.partner_a._get_eadu_partner()
-        eadu_child_b = self.partner_b._get_eadu_partner()
-
-        # eadu.product state
-        self.assertEqual(eadu_product_a.state, 'linked', "eadu.product should be linked")
-        self.assertEqual(eadu_product_a.product_id, local_product,
-                         "eadu.product.product_id should point to the local product")
-
-        # product.supplierinfo on A's side
-        supplier_info = self.env['product.supplierinfo'].sudo().search([
-            ('product_tmpl_id', '=', local_product.product_tmpl_id.id),
-            ('partner_id', '=', eadu_child_a.commercial_partner_id.id),
-        ])
-        self.assertTrue(supplier_info,
-                        "product.supplierinfo should exist for the linked product on A's side")
-
-        # eadu.partner.any on A's side
-        mapping_a = EaduAny.search([
+        mapping = self.env['eadu.partner.any'].sudo().search([
             ('partner_id', '=', eadu_child_a.id),
             ('res_model', '=', 'product.product'),
-            ('res_id', '=', local_product.id),
+            ('res_id', '=', product_a.id),
             ('eadu_ident', '=', product_b.id),
         ])
-        self.assertTrue(mapping_a, "eadu.partner.any should exist on A's side")
-        self.assertEqual(mapping_a.master_status, 'partner',
-                         "B is master on A's side (A imported from B)")
+        self.assertTrue(mapping, "A-side product mapping should exist")
+        self.assertEqual(mapping.master_status, state)
 
-        # eadu.partner.any on B's side
-        mapping_b = EaduAny.search([
+    def _assert_remote_mapping(self, product_a, product_b):
+        eadu_child_b = self.partner_b._get_eadu_partner()
+        mapping = self.env['eadu.partner.any'].sudo().search([
             ('partner_id', '=', eadu_child_b.id),
             ('res_model', '=', 'product.product'),
             ('res_id', '=', product_b.id),
-            ('eadu_ident', '=', local_product.id),
+            ('eadu_ident', '=', product_a.id),
         ])
-        self.assertTrue(mapping_b, "eadu.partner.any should exist on B's side")
-        self.assertEqual(mapping_b.master_status, 'me',
-                         "B is master on B's side (B originally had the product)")
+        self.assertTrue(mapping, "B-side symmetric product mapping should exist")
+        self.assertEqual(mapping.master_status, 'me')
 
-    # ── Tests ────────────────────────────────────────────────────────────
+    def _supplierinfo_for(self, product_a):
+        eadu_child_a = self.partner_a._get_eadu_partner()
+        return self.env['product.supplierinfo'].sudo().search([
+            ('product_tmpl_id', '=', product_a.product_tmpl_id.id),
+            ('product_id', '=', product_a.id),
+            ('partner_id', '=', eadu_child_a.commercial_partner_id.id),
+        ])
 
-    def test_create_product(self):
-        """
-        A receives an imported product from B and creates a brand-new local
-        product.product via action_create_product.
-        """
-        eadu_product_a, product_b = self._create_product_in_b(
-            name="Widget",
+    def test_import_creates_inactive_native_product_when_no_match(self):
+        product_b = self._create_product_in_b(
+            name="Remote Widget",
             barcode="4006381333931",
             default_code="WGT-001",
-            standard_price=12.50,
+            list_price=12.50,
         )
 
-        # Verify the imported data was captured correctly.
-        self.assertEqual(eadu_product_a.name, "Widget")
-        self.assertEqual(eadu_product_a.barcode, "4006381333931")
-        self.assertEqual(eadu_product_a.state, 'pending')
+        product_a = self._push_product_to_a(product_b)
 
-        # A creates a new local product from the imported data.
-        eadu_product_a.with_user(self.user_a).action_create_product()
+        self.assertEqual(product_a.name, "Remote Widget")
+        self.assertFalse(product_a.active)
+        self.assertTrue(product_a.eadu_catalog)
+        self.assertEqual(product_a.eadu_merge_state, 'needs_review')
+        self.assertEqual(product_a.eadu_origin_ident, product_b.id)
+        self.assertEqual(product_a.eadu_remote_barcode, "4006381333931")
+        self.assertIn('EADU catalog', product_a.all_product_tag_ids.mapped('name'))
+        self._assert_product_mapping(product_a, product_b)
+        self._assert_remote_mapping(product_a, product_b)
 
-        local_product = eadu_product_a.product_id
-        self.assertTrue(local_product.exists(),
-                        "A new product.product should have been created")
-        self.assertEqual(local_product.name, "Widget")
-        self.assertEqual(local_product.barcode, "4006381333931")
-
-        self._assert_linked(eadu_product_a, product_b, local_product)
-
-    def test_link_existing_product(self):
-        """
-        A receives an imported product from B and links it to an existing local
-        product.product via action_link_product.
-        """
-        # A already has a local product (e.g. from a previous catalogue import).
-        existing_product = self.env['product.product'].sudo().create({
-            'name': "Gadget",
-            'default_code': "GDG-001",
-            'company_id': self.company_a.id,
-        })
-
-        eadu_product_a, product_b = self._create_product_in_b(
-            name="Gadget",
-            default_code="GDG-001",
-            standard_price=8.00,
-        )
-
-        self.assertEqual(eadu_product_a.state, 'pending')
-
-        # A's user sets product_id to the existing product and triggers the link.
-        eadu_product_a.sudo().product_id = existing_product
-        eadu_product_a.with_user(self.user_a).action_link_product()
-
-        self._assert_linked(eadu_product_a, product_b, existing_product)
-
-    def test_import_deduplication(self):
-        """
-        Calling action_eadu_import_product twice for the same remote product
-        must not create a duplicate eadu.product record.
-        """
-        eadu_product_a, product_b = self._create_product_in_b(name="Duplicate Widget")
-
-        eadu_child_b = self.partner_b._get_eadu_partner()
-        result2 = eadu_child_b._eadu_call(
-            'eadu.product',
-            'action_eadu_import_product',
-            {
-                'eadu_ident': product_b.id,
-                'name': "Duplicate Widget",
-            },
-        )
-        self.assertEqual(
-            result2['result'], eadu_product_a.id,
-            "Second push should return the existing eadu.product id",
-        )
-        count = self.env['eadu.product'].sudo().search_count([
-            ('eadu_ident', '=', product_b.id),
-        ])
-        self.assertEqual(count, 1, "Only one eadu.product record should exist")
-
-    def test_suggested_product_by_barcode(self):
-        """
-        The suggested_product_id computation should prefer barcode over name.
-        """
-        local = self.env['product.product'].sudo().create({
-            'name': "Some Other Name",
+    def test_import_auto_links_single_local_barcode_match(self):
+        local_a = self.env['product.product'].sudo().create({
+            'name': "Local Widget",
             'barcode': "0000000000001",
             'company_id': self.company_a.id,
         })
-        eadu_product_a, _ = self._create_product_in_b(
-            name="Different Name",
+        product_b = self._create_product_in_b(
+            name="Remote Widget",
             barcode="0000000000001",
-        )
-        self.assertEqual(
-            eadu_product_a.with_user(self.user_a).suggested_product_id, local,
-            "Barcode match should be used for suggestion",
+            list_price=8.75,
         )
 
-    def test_suggested_product_by_name(self):
-        """
-        When no barcode is available, a name match is used as suggestion.
-        """
-        local = self.env['product.product'].sudo().create({
-            'name': "Named Product",
+        product_a = self._push_product_to_a(product_b)
+
+        self.assertEqual(product_a, local_a)
+        self.assertTrue(product_a.active)
+        self.assertTrue(product_a.eadu_catalog)
+        self.assertEqual(product_a.eadu_merge_state, 'auto_linked')
+        self._assert_product_mapping(product_a, product_b)
+        self._assert_remote_mapping(product_a, product_b)
+
+    def test_import_deduplicates_by_eadu_mapping(self):
+        product_b = self._create_product_in_b(name="Duplicate Widget", list_price=5.0)
+
+        product_a = self._push_product_to_a(product_b)
+        product_a_2 = self._push_product_to_a(product_b, name="Duplicate Widget Updated", sale_price=6.0)
+
+        self.assertEqual(product_a_2, product_a)
+        mappings = self.env['eadu.partner.any'].sudo().search([
+            ('res_model', '=', 'product.product'),
+            ('res_id', '=', product_a.id),
+            ('eadu_ident', '=', product_b.id),
+        ])
+        self.assertEqual(len(mappings), 1)
+        self.assertEqual(self._supplierinfo_for(product_a).price, 6.0)
+
+    def test_publisher_sale_price_becomes_supplierinfo_price(self):
+        product_b = self._create_product_in_b(
+            name="Priced Widget",
+            barcode="1234567890123",
+            list_price=19.99,
+        )
+
+        product_a = self._push_product_to_a(product_b)
+        supplierinfo = self._supplierinfo_for(product_a)
+
+        self.assertTrue(supplierinfo)
+        self.assertEqual(supplierinfo.price, 19.99)
+        self.assertEqual(supplierinfo.product_name, "Priced Widget")
+        self.assertFalse(product_a.active)
+
+    def test_tiered_sale_prices_become_supplierinfo_quantity_breaks(self):
+        product_b = self._create_product_in_b(name="Tiered Widget")
+
+        product_a = self._push_product_to_a(product_b, tiered_prices=[
+            {'min_qty': 0.0, 'price': 10.0},
+            {'min_qty': 10.0, 'price': 8.5},
+            {'min_qty': 50.0, 'price': 7.0},
+        ])
+
+        prices_by_qty = {
+            seller.min_qty: seller.price
+            for seller in self._supplierinfo_for(product_a)
+        }
+        self.assertEqual(prices_by_qty[0.0], 10.0)
+        self.assertEqual(prices_by_qty[10.0], 8.5)
+        self.assertEqual(prices_by_qty[50.0], 7.0)
+
+    def test_remote_attributes_block_auto_barcode_merge_until_mapping_exists(self):
+        local_a = self.env['product.product'].sudo().create({
+            'name': "Local Shirt Blue",
+            'barcode': "2222222222222",
             'company_id': self.company_a.id,
         })
-        eadu_product_a, _ = self._create_product_in_b(name="Named Product")
-        self.assertEqual(
-            eadu_product_a.with_user(self.user_a).suggested_product_id, local,
-            "Name match should be used for suggestion when no barcode",
+        product_b = self._create_product_in_b(
+            name="Remote Shirt Blue",
+            barcode="2222222222222",
+            list_price=15.0,
         )
+
+        product_a = self._push_product_to_a(product_b, attributes=[
+            {'name': 'Colour', 'value': 'Blue'},
+        ])
+
+        self.assertNotEqual(product_a, local_a)
+        self.assertFalse(product_a.active)
+        self.assertFalse(product_a.barcode, "Unreviewed duplicate barcode must not be written locally")
+        self.assertEqual(product_a.eadu_remote_barcode, "2222222222222")
+        self.assertEqual(product_a.eadu_merge_state, 'needs_review')
+        self.assertIn('attribute mapping', product_a.eadu_review_reason)
+        self._assert_product_mapping(product_a, product_b)
+
+    def test_merge_wizard_moves_mapping_and_supplierinfo_to_target_product(self):
+        target_a = self.env['product.product'].sudo().create({
+            'name': "Accepted Widget",
+            'company_id': self.company_a.id,
+        })
+        product_b = self._create_product_in_b(
+            name="Remote Widget",
+            barcode="3333333333333",
+            list_price=21.0,
+        )
+        source_a = self._push_product_to_a(product_b)
+
+        wizard = self.env['eadu.product.merge.wizard'].with_user(self.user_a).create({
+            'source_product_id': source_a.id,
+            'target_product_id': target_a.id,
+        })
+        wizard.action_merge()
+
+        self.assertEqual(target_a.barcode, "3333333333333")
+        self.assertEqual(target_a.eadu_merge_state, 'accepted')
+        self.assertEqual(source_a.eadu_merge_state, 'ignored')
+        self._assert_product_mapping(target_a, product_b)
+        self.assertFalse(self.env['eadu.partner.any'].sudo().search([
+            ('res_model', '=', 'product.product'),
+            ('res_id', '=', source_a.id),
+            ('eadu_ident', '=', product_b.id),
+        ]))
+        supplierinfo = self._supplierinfo_for(target_a)
+        self.assertTrue(supplierinfo)
+        self.assertEqual(supplierinfo.price, 21.0)

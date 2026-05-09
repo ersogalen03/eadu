@@ -57,6 +57,21 @@ class DiscussChannelRtcSession(models.Model):
                         _logger.debug("eadu rtc: could not notify %s that session left", eadu_partner.name)
         return super().unlink()
 
+    def _update_and_broadcast(self, values):
+        super()._update_and_broadcast(values)
+        if self.env.context.get("eadu_rtc_sync"):
+            return
+        for session in self.filtered(lambda s: not s.eadu_remote_session_id):
+            _logger.warning(
+                "EADU RTC DEBUG local state broadcast session=%s channel=%s member=%s partner=%s values=%s",
+                session.id,
+                session.channel_id.id,
+                session.channel_member_id.id,
+                session.channel_member_id.partner_id.name,
+                session._eadu_session_state_values(values),
+            )
+            session._eadu_announce_local_session_update(values)
+
     def _notify_peers(self, notifications):
         self.ensure_one()
         remote_targets = self.env["discuss.channel.rtc.session"].sudo()
@@ -127,7 +142,7 @@ class DiscussChannelRtcSession(models.Model):
                 _logger.debug("eadu rtc: could not relay signaling to %s", eadu_partner.name)
 
     @api.model
-    def action_eadu_session_joined(self, channel_id, session_id, member_id):
+    def action_eadu_session_joined(self, channel_id, session_id, member_id, session_values=None):
         eadu_partner = self.env.user.partner_id
         if not eadu_partner.eadu_url:
             raise AccessError("RTC sync is only accepted from an EADU partner.")
@@ -137,6 +152,7 @@ class DiscussChannelRtcSession(models.Model):
             channel=channel,
             remote_session_id=session_id,
             remote_member_id=member_id,
+            session_values=session_values,
             invite=True,
         )
         return {
@@ -160,6 +176,34 @@ class DiscussChannelRtcSession(models.Model):
             sessions.ids,
         )
         sessions.with_context(eadu_rtc_sync=True).unlink()
+
+    @api.model
+    def action_eadu_session_updated(self, session_id, values):
+        eadu_partner = self.env.user.partner_id
+        if not eadu_partner.eadu_url:
+            raise AccessError("RTC update is only accepted from an EADU partner.")
+        session = self.sudo().search([
+            ("eadu_partner_id", "=", eadu_partner.id),
+            ("eadu_remote_session_id", "=", session_id),
+        ], limit=1)
+        if not session:
+            _logger.info(
+                "eadu rtc: update ignored for unknown remote session partner=%s remote=%s values=%s",
+                eadu_partner.name,
+                session_id,
+                values,
+            )
+            return
+        values = self._eadu_session_state_values(values)
+        _logger.info(
+            "eadu rtc: applying remote session update partner=%s remote=%s local=%s values=%s",
+            eadu_partner.name,
+            session_id,
+            session.id,
+            values,
+        )
+        if values:
+            session.with_context(eadu_rtc_sync=True)._update_and_broadcast(values)
 
     @api.model
     def action_eadu_relay_peer_notifications(self, items):
@@ -237,6 +281,7 @@ class DiscussChannelRtcSession(models.Model):
                         "channel_id": self.channel_id.id,
                         "session_id": self.id,
                         "member_id": member_map.eadu_ident,
+                        "session_values": self._eadu_session_state_values(),
                     },
                 )
             except EaduConnectionError:
@@ -249,8 +294,30 @@ class DiscussChannelRtcSession(models.Model):
                     channel=self.channel_id,
                     remote_session_id=remote_session["session_id"],
                     remote_member_id=remote_session["member_id"],
+                    session_values=remote_session.get("session_values"),
                     invite=False,
                 )
+
+    def _eadu_announce_local_session_update(self, values):
+        self.ensure_one()
+        values = self._eadu_session_state_values(values)
+        if not values:
+            return
+        for eadu_partner in self._eadu_channel_partners():
+            try:
+                _logger.info(
+                    "eadu rtc: announce local session update session=%s partner=%s values=%s",
+                    self.id,
+                    eadu_partner.name,
+                    values,
+                )
+                eadu_partner._eadu_call(
+                    "discuss.channel.rtc.session",
+                    "action_eadu_session_updated",
+                    {"session_id": self.id, "values": values},
+                )
+            except EaduConnectionError:
+                _logger.debug("eadu rtc: could not announce session update to %s", eadu_partner.name)
 
     def _eadu_channel_partners(self):
         self.ensure_one()
@@ -286,8 +353,21 @@ class DiscussChannelRtcSession(models.Model):
         return eadu_partners
 
     @api.model
-    def _eadu_sync_remote_session(self, eadu_partner, channel, remote_session_id, remote_member_id, invite):
+    def _eadu_sync_remote_session(self, eadu_partner, channel, remote_session_id, remote_member_id, session_values=None, invite=False):
         member = self._eadu_find_local_member(eadu_partner, channel, remote_member_id)
+        _logger.warning(
+            "EADU RTC DEBUG sync request partner=%s channel=%s remote_session=%s remote_member=%s "
+            "local_member=%s local_partner=%s incoming_values=%s existing_id=%s existing_member_session=%s",
+            eadu_partner.name,
+            channel.id,
+            remote_session_id,
+            remote_member_id,
+            member.id,
+            member.partner_id.name,
+            self._eadu_session_state_values(session_values),
+            self.sudo().browse(int(remote_session_id)).exists().id,
+            self.sudo().search([("channel_member_id", "=", member.id)], limit=1).id,
+        )
         session = self.sudo().search([
             ("eadu_partner_id", "=", eadu_partner.id),
             ("eadu_remote_session_id", "=", remote_session_id),
@@ -302,6 +382,23 @@ class DiscussChannelRtcSession(models.Model):
                 invite,
             )
         else:
+            occupied_id = self.sudo().browse(int(remote_session_id)).exists()
+            if occupied_id:
+                _logger.error(
+                    "eadu rtc: REFUSING remote sync with colliding rtc session id; "
+                    "cross-database RTC requires the same session ids, but id %s is already used locally. "
+                    "existing_member=%s existing_partner=%s existing_remote=%s incoming_partner=%s "
+                    "channel=%s remote_member=%s members=%s",
+                    remote_session_id,
+                    occupied_id.channel_member_id.id,
+                    occupied_id.channel_member_id.partner_id.name,
+                    occupied_id.eadu_remote_session_id,
+                    eadu_partner.name,
+                    channel.id,
+                    remote_member_id,
+                    self._eadu_channel_member_debug(channel),
+                )
+                raise AccessError("RTC session id collision while syncing an EADU call.")
             session = self.sudo().search([("channel_member_id", "=", member.id)], limit=1)
             if session:
                 _logger.error(
@@ -328,10 +425,15 @@ class DiscussChannelRtcSession(models.Model):
                 )
             else:
                 session = self.sudo().with_context(eadu_rtc_sync=True).create({
+                    "id": int(remote_session_id),
                     "channel_member_id": member.id,
                     "eadu_partner_id": eadu_partner.id,
                     "eadu_remote_session_id": remote_session_id,
                 })
+                session._eadu_fix_sequence_after_explicit_id()
+        session_values = self._eadu_session_state_values(session_values)
+        if session_values:
+            session.with_context(eadu_rtc_sync=True)._update_and_broadcast(session_values)
         if invite:
             self._eadu_invite_local_members(member, session)
         return session
@@ -389,8 +491,34 @@ class DiscussChannelRtcSession(models.Model):
                 ("res_id", "=", session.channel_member_id.partner_id.id),
             ], limit=1)
             if member_map and member_map.eadu_ident:
-                data.append({"session_id": session.id, "member_id": member_map.eadu_ident})
+                data.append({
+                    "session_id": session.id,
+                    "member_id": member_map.eadu_ident,
+                    "session_values": session._eadu_session_state_values(),
+                })
         return data
+
+    def _eadu_session_state_values(self, values=None):
+        self.ensure_one() if self else None
+        valid_keys = {"is_screen_sharing_on", "is_camera_on", "is_muted", "is_deaf"}
+        if values is None:
+            return {key: self[key] for key in valid_keys}
+        return {key: values[key] for key in valid_keys if key in values}
+
+    def _eadu_fix_sequence_after_explicit_id(self):
+        self.ensure_one()
+        self.env.cr.execute(
+            """
+            SELECT setval(
+                pg_get_serial_sequence(%s, 'id'),
+                GREATEST(
+                    COALESCE((SELECT MAX(id) FROM discuss_channel_rtc_session), 1),
+                    COALESCE((SELECT last_value FROM discuss_channel_rtc_session_id_seq), 1)
+                )
+            )
+            """,
+            [self._table],
+        )
 
     def _eadu_find_local_channel(self, eadu_partner, remote_channel_id):
         channel_map = self.env["eadu.partner.any"].sudo().search([
