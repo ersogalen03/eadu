@@ -46,6 +46,7 @@ Test scenarios
 import base64
 from unittest.mock import patch
 
+from odoo.exceptions import AccessError
 from odoo.tests import common, tagged
 
 from odoo.addons.eadu.exceptions import EaduConnectionError
@@ -748,6 +749,59 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertEqual(len(portal_users_b), 1,
                          "B's EADU contact must have exactly one portal user after two exchanges")
 
+    def test_exchange_wizard_generates_and_receives_token(self):
+        """The settings-only wizard supports both sides of the exchange flow."""
+        wizard_generate = self.env["eadu.exchange.wizard"].with_user(self.user_a).create({
+            "mode": "generate",
+            "partner_id": self.partner_a.id,
+        })
+        wizard_generate.action_generate()
+        self.assertTrue(wizard_generate.generated_token)
+
+        decoded = self.env["res.partner"]._decode_eadu_exchange_token(
+            wizard_generate.generated_token
+        )
+        self.assertEqual(decoded["partner_name"], self.partner_a.name)
+
+        wizard_receive = self.env["eadu.exchange.wizard"].with_user(self.user_b).create({
+            "mode": "receive",
+            "partner_id": self.partner_b.id,
+            "token": wizard_generate.generated_token,
+        })
+        wizard_receive.action_receive()
+        self.assertTrue(self.partner_b._get_eadu_partner().eadu_url)
+
+    def test_exchange_wizard_guesses_partner_from_token(self):
+        """Generated codes include a partner name so receiving from the menu can prefill it."""
+        local_partner_for_a = self.ResPartner.create({
+            "name": self.partner_a.name,
+            "company_type": "company",
+            "company_id": self.company_b.id,
+        })
+        token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        wizard = self.env["eadu.exchange.wizard"].with_user(self.user_b).create({
+            "mode": "receive",
+            "token": token,
+        })
+        wizard._onchange_token()
+        self.assertEqual(wizard.partner_id, local_partner_for_a)
+        self.assertEqual(wizard.guessed_partner_id, local_partner_for_a)
+
+    def test_exchange_requires_settings_access(self):
+        regular_user = self.ResUsers.create({
+            "name": "EADU Regular User",
+            "login": "eadu_regular_user",
+            "email": "eadu_regular_user@example.com",
+            "company_id": self.company_a.id,
+            "company_ids": [(6, 0, [self.company_a.id])],
+            "group_ids": [(6, 0, [self.env.ref("base.group_user").id])],
+        })
+        with self.assertRaises(AccessError):
+            self.env["eadu.exchange.wizard"].with_user(regular_user).create({
+                "mode": "generate",
+                "partner_id": self.partner_a.id,
+            })
+
     def test_rewrite_oe_links_remaps_known_ids(self):
         """
         After an exchange, ``_rewrite_oe_links`` replaces ``data-oe-id``
@@ -809,4 +863,3 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             with self.assertRaises(Exception,
                                    msg=f"Should raise for malformed token: {token!r}"):
                 self.partner_b.with_user(self.user_b).button_process_eadu_exchanged()
-

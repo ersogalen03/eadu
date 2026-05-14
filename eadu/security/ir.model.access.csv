@@ -3,3 +3,4 @@ access_eadu_partner_any_user,eadu.partner.any user,eadu.model_eadu_partner_any,b
 access_eadu_partner_any_portal_eadu,eadu.partner.any portal eadu,eadu.model_eadu_partner_any,eadu.group_portal_eadu,1,0,0,0
 access_mail_message_reaction_portal_eadu,mail.message.reaction portal eadu,mail.model_mail_message_reaction,eadu.group_portal_eadu,1,0,0,1
 access_eadu_partner_any_system,eadu.partner.any system,eadu.model_eadu_partner_any,base.group_system,1,1,1,1
+access_eadu_exchange_wizard_system,eadu.exchange.wizard system,eadu.model_eadu_exchange_wizard,base.group_system,1,1,1,1

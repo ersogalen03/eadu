@@ -2,11 +2,13 @@
 
 import requests
 import base64
+import binascii
 import odoo
 import threading
 import logging
 
 from odoo import api, fields, models, Command, _
+from odoo.exceptions import AccessError, UserError
 from odoo.addons.mail.tools.discuss import Store
 
 from odoo.addons.eadu.exceptions import EaduConnectionError
@@ -27,7 +29,30 @@ class ResPartner(models.Model):
 
     # This should be in a wizard instead
     eadu_exchanged = fields.Char('Token Exchanged', copy=False)
+    eadu_connection_partner_id = fields.Many2one(
+        "res.partner",
+        string="EADU Contact",
+        compute="_compute_eadu_connection",
+    )
+    eadu_connection_url = fields.Char(
+        string="EADU URL",
+        compute="_compute_eadu_connection",
+    )
+    eadu_connection_db = fields.Char(
+        string="EADU Database",
+        compute="_compute_eadu_connection",
+    )
 
+    def _check_eadu_exchange_access(self):
+        if not self.env.user.has_group("base.group_system"):
+            raise AccessError(_("Only users with Settings access can manage EADU connections."))
+
+    def _compute_eadu_connection(self):
+        for partner in self:
+            eadu_contact = partner._get_eadu_partner()
+            partner.eadu_connection_partner_id = eadu_contact
+            partner.eadu_connection_url = eadu_contact.eadu_url
+            partner.eadu_connection_db = eadu_contact.eadu_db
 
     def _get_eadu_partner(self):
         self.ensure_one()
@@ -116,6 +141,7 @@ class ResPartner(models.Model):
     def _generate_eadu_exchange(self):
         """ Generate an exchange token for linking 2 companies"""        
         self.ensure_one()
+        self._check_eadu_exchange_access()
         # Check if there is a child partner which is linked to an is_eadu user
         eadu_contact = self._create_update_eadu_child_partner()
         api_key = eadu_contact._generate_eadu_key()
@@ -123,7 +149,81 @@ class ResPartner(models.Model):
         web_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         dbname = self._get_db_name()
         cuser = self.env.user # To already create yourself in the other db (if you have not been already)
-        return base64.b64encode('#'.join([web_url, api_key, dbname, cuser.name, str(cuser.partner_id.id)]).encode()).decode()
+        return base64.b64encode('#'.join([
+            web_url,
+            api_key,
+            dbname,
+            cuser.name,
+            str(cuser.partner_id.id),
+            self.commercial_partner_id.name,
+        ]).encode()).decode()
+
+    @api.model
+    def _decode_eadu_exchange_token(self, token):
+        try:
+            con_str = base64.b64decode(token.strip().encode(), validate=True).decode()
+        except (binascii.Error, UnicodeDecodeError, AttributeError):
+            raise UserError(_("This EADU code is not valid."))
+
+        con_arr = con_str.split('#', 5)
+        if len(con_arr) < 5:
+            raise UserError(_("This EADU code is incomplete."))
+        return {
+            'url': con_arr[0],
+            'apikey': con_arr[1],
+            'db': con_arr[2],
+            'user_name': con_arr[3],
+            'partner_id': con_arr[4],
+            'partner_name': con_arr[5] if len(con_arr) > 5 else False,
+        }
+
+    def _process_eadu_exchange_token(self, token):
+        self.ensure_one()
+        self._check_eadu_exchange_access()
+        con_data = self._decode_eadu_exchange_token(token)
+
+        eadu_contact = self._create_update_eadu_child_partner()
+        eadu_contact.eadu_url = con_data['url']
+        eadu_contact.eadu_apikey = con_data['apikey']
+        eadu_contact.eadu_db = con_data['db']
+        apikey = eadu_contact._generate_eadu_key()
+        try:
+            remote_partner_id = int(con_data['partner_id'])
+        except (TypeError, ValueError):
+            raise UserError(_("This EADU code contains an invalid partner identifier."))
+        connecting_contact = eadu_contact._create_child_contact(
+            con_data['user_name'],
+            remote_partner_id,
+        )
+        cuser = self.env.user
+        res = eadu_contact._eadu_call('res.partner', 'action_connect_eadu', {
+            'apikey': apikey,
+            'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url'),
+            'db': self._get_db_name(),
+            'cusername': cuser.name,
+            'cpartnereadu': cuser.partner_id.id,
+            'ypartnereadu': connecting_contact.id, # newly created partner in this db
+            'ypartnerid': remote_partner_id, # for the contacted db to verify who started it originally
+        })
+        ypartnerid = res['result']
+        if ypartnerid:
+            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.users', cuser.id, ypartnerid)
+
+    def action_open_eadu_exchange_wizard(self):
+        self.ensure_one()
+        self._check_eadu_exchange_access()
+        return {
+            'type': 'ir.actions.act_window',
+            'name': _("Connect EADU"),
+            'res_model': 'eadu.exchange.wizard',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {
+                'default_partner_id': self.commercial_partner_id.id,
+                'active_model': 'res.partner',
+                'active_id': self.commercial_partner_id.id,
+            },
+        }
 
     def button_generate_eadu_exchange(self):
         exch = self._generate_eadu_exchange()
@@ -136,30 +236,7 @@ class ResPartner(models.Model):
 
     def button_process_eadu_exchanged(self):
         self.ensure_one()
-        # Decode the exchange token
-        con_str = base64.b64decode(self.eadu_exchanged.encode()).decode()
-        con_arr = con_str.split('#')
-
-
-        eadu_contact = self._create_update_eadu_child_partner()
-        eadu_contact.eadu_url = con_arr[0]
-        eadu_contact.eadu_apikey = con_arr[1]
-        eadu_contact.eadu_db = con_arr[2]
-        apikey = eadu_contact._generate_eadu_key()
-        connecting_contact = eadu_contact._create_child_contact(con_arr[3], int(con_arr[4]))
-        cuser = self.env.user
-        res = eadu_contact._eadu_call('res.partner', 'action_connect_eadu', {
-            'apikey': apikey,
-            'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url'),
-            'db': self._get_db_name(),
-            'cusername': cuser.name,
-            'cpartnereadu': cuser.partner_id.id,
-            'ypartnereadu': connecting_contact.id, # newly created partner in this db
-            'ypartnerid': con_arr[4], # for the contacted db to verify who started it originally
-        })
-        ypartnerid = res['result']
-        if ypartnerid:
-            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.users', cuser.id, ypartnerid)
+        self._process_eadu_exchange_token(self.eadu_exchanged)
 
     def action_connect_eadu(self, apikey, url, db, cusername, cpartnereadu, ypartnereadu, ypartnerid):
         user = self.env.user

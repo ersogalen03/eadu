@@ -6,20 +6,25 @@
         <field name="model">res.partner</field>
         <field name="inherit_id" ref="base.view_partner_form"/>
         <field name="arch" type="xml">
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_open_eadu_exchange_wizard"
+                        type="object"
+                        class="oe_stat_button"
+                        icon="fa-exchange"
+                        groups="base.group_system">
+                    <div class="o_field_widget o_stat_info">
+                        <span class="o_stat_text">Connect EADU</span>
+                    </div>
+                </button>
+            </xpath>
             <notebook position="inside">
-                <page string="EADU Exchange">
+                <page string="EADU" groups="base.group_system">
                     <group>
-                        <field name="eadu_url"/>
-                    </group>
-                    <group>
-                    <button name="button_generate_eadu_exchange" type="object" class="btn-secondary"
-                        string="Generate EADU Exchange" invisible="eadu_url or eadu_exchanged"/>
-                    </group>
-                    <group>
-                        <field name="eadu_exchanged"/>
-                        <button name="button_process_eadu_exchanged" type="object" class="oe_link"
-                            string="Process EADU Exchange"/>
-                    
+                        <field name="eadu_connection_partner_id" readonly="1"/>
+                        <field name="eadu_connection_url" readonly="1"/>
+                        <field name="eadu_connection_db" readonly="1"/>
+                        <button name="action_open_eadu_exchange_wizard" type="object"
+                            class="btn-secondary" string="Connect EADU"/>
                     </group>
                 </page>
             </notebook>

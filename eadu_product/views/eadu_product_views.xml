@@ -84,13 +84,9 @@
         <field name="code">action = records.action_eadu_push()</field>
     </record>
 
-    <menuitem id="menu_eadu_root"
-              name="Eadu"
-              sequence="99"/>
-
     <menuitem id="menu_eadu_products"
               name="Catalog Products"
-              parent="menu_eadu_root"
+              parent="eadu.menu_eadu_root"
               action="action_eadu_product"
               sequence="10"/>
 
