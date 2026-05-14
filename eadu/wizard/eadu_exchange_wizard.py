@@ -21,6 +21,8 @@ class EaduExchangeWizard(models.TransientModel):
         string="Partner",
         domain=[("is_company", "=", True)],
     )
+    create_partner = fields.Boolean(string="Create Partner")
+    partner_name = fields.Char(string="New Partner Name")
     token = fields.Text(string="Received Code")
     generated_token = fields.Text(string="Generated Code", readonly=True)
     guessed_partner_id = fields.Many2one(
@@ -64,28 +66,55 @@ class EaduExchangeWizard(models.TransientModel):
         self.remote_user_name = token_data["user_name"]
         self.remote_partner_name = token_data.get("partner_name")
 
+        if self.create_partner:
+            self.partner_name = self._partner_name_from_token(token_data)
+            return
+
         guessed_partner = self._guess_partner_from_token(token_data)
         self.guessed_partner_id = guessed_partner
         if guessed_partner and not self.partner_id:
             self.partner_id = guessed_partner
+        elif not guessed_partner and not self.partner_id and not self.partner_name:
+            self.partner_name = self._partner_name_from_token(token_data)
+
+    @api.onchange("mode")
+    def _onchange_mode(self):
+        if self.mode == "generate":
+            self.token = False
+        else:
+            self.generated_token = False
+
+    @api.onchange("partner_id")
+    def _onchange_partner_id(self):
+        if self.partner_id:
+            self.create_partner = False
+            self.partner_name = False
 
     def _guess_partner_from_token(self, token_data):
         Partner = self.env["res.partner"]
+        company_domain = [
+            "|",
+            ("company_id", "=", False),
+            ("company_id", "in", self.env.companies.ids),
+        ]
         remote_url = token_data.get("url")
         if remote_url:
-            eadu_contact = Partner.search([("eadu_url", "=", remote_url)], limit=1)
+            eadu_contact = Partner.search(
+                [("eadu_url", "=", remote_url)] + company_domain,
+                limit=1,
+            )
             if eadu_contact:
                 return eadu_contact.commercial_partner_id
 
         partner_name = token_data.get("partner_name")
         if partner_name:
-            partner = Partner.search([
+            partner = Partner.search(company_domain + [
                 ("is_company", "=", True),
                 ("name", "=ilike", partner_name),
             ], limit=1)
             if partner:
                 return partner
-            partner = Partner.search([
+            partner = Partner.search(company_domain + [
                 ("is_company", "=", True),
                 ("name", "ilike", partner_name),
             ], limit=1)
@@ -94,18 +123,58 @@ class EaduExchangeWizard(models.TransientModel):
 
         remote_db = token_data.get("db")
         if remote_db:
-            return Partner.search([
+            return Partner.search(company_domain + [
                 ("is_company", "=", True),
                 ("name", "ilike", remote_db),
             ], limit=1)
         return Partner.browse()
 
+    def _partner_name_from_token(self, token_data):
+        return token_data.get("partner_name") or token_data.get("db") or token_data.get("url")
+
+    def _create_partner(self, name):
+        if not name:
+            raise UserError(_("Enter a name for the partner to create."))
+        return self.env["res.partner"].create({
+            "name": name,
+            "company_type": "company",
+            "is_company": True,
+        })
+
+    def _get_or_create_partner_for_generate(self):
+        if self.partner_id:
+            return self.partner_id
+        if not self.create_partner:
+            raise UserError(_("Choose an existing partner or create a new one."))
+        partner = self._create_partner(self.partner_name)
+        self.partner_id = partner
+        self.create_partner = False
+        return partner
+
+    def _get_or_create_partner_for_receive(self, token_data):
+        if self.partner_id:
+            return self.partner_id
+
+        if self.create_partner:
+            partner = self._create_partner(self.partner_name or self._partner_name_from_token(token_data))
+            self.partner_id = partner
+            self.create_partner = False
+            return partner
+
+        guessed_partner = self._guess_partner_from_token(token_data)
+        if guessed_partner:
+            self.partner_id = guessed_partner
+            self.guessed_partner_id = guessed_partner
+            self.create_partner = False
+            return guessed_partner
+
+        raise UserError(_("Choose an existing partner or create one from the received EADU code."))
+
     def action_generate(self):
         self.ensure_one()
         self._check_exchange_access()
-        if not self.partner_id:
-            raise UserError(_("Choose the partner that should receive this EADU code."))
-        self.generated_token = self.partner_id._generate_eadu_exchange()
+        partner = self._get_or_create_partner_for_generate()
+        self.generated_token = partner._generate_eadu_exchange()
         return {
             "type": "ir.actions.act_window",
             "name": _("Connect EADU"),
@@ -118,16 +187,16 @@ class EaduExchangeWizard(models.TransientModel):
     def action_receive(self):
         self.ensure_one()
         self._check_exchange_access()
-        if not self.partner_id:
-            raise UserError(_("Choose the partner that sent this EADU code."))
         if not self.token:
             raise UserError(_("Paste the EADU code you received."))
 
-        self.partner_id._process_eadu_exchange_token(self.token)
+        token_data = self.env["res.partner"]._decode_eadu_exchange_token(self.token)
+        partner = self._get_or_create_partner_for_receive(token_data)
+        partner._process_eadu_exchange_token(self.token)
         return {
             "type": "ir.actions.act_window",
             "name": _("Partner"),
             "res_model": "res.partner",
             "view_mode": "form",
-            "res_id": self.partner_id.id,
+            "res_id": partner.id,
         }

@@ -42,6 +42,11 @@ class ResPartner(models.Model):
         string="EADU Database",
         compute="_compute_eadu_connection",
     )
+    has_eadu_partner = fields.Boolean(
+        string="Has EADU Partner",
+        compute="_compute_has_eadu_partner",
+        store=True,
+    )
 
     def _check_eadu_exchange_access(self):
         if not self.env.user.has_group("base.group_system"):
@@ -49,16 +54,19 @@ class ResPartner(models.Model):
 
     def _compute_eadu_connection(self):
         for partner in self:
-            eadu_contact = partner._get_eadu_partner()
+            eadu_contact = partner.commercial_partner_id.child_ids.filtered("eadu_url")[:1]
             partner.eadu_connection_partner_id = eadu_contact
             partner.eadu_connection_url = eadu_contact.eadu_url
             partner.eadu_connection_db = eadu_contact.eadu_db
 
+    @api.depends("commercial_partner_id.child_ids.eadu_url")
+    def _compute_has_eadu_partner(self):
+        for partner in self:
+            partner.has_eadu_partner = bool(partner.commercial_partner_id.child_ids.filtered("eadu_url"))
+
     def _get_eadu_partner(self):
         self.ensure_one()
-        partner = self.commercial_partner_id
-        eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_url)
-        return eadu_contact and eadu_contact[0] or eadu_contact
+        return self.eadu_connection_partner_id
 
     def _get_db_name(self):
         db = odoo.tools.config['db_name']
@@ -75,7 +83,7 @@ class ResPartner(models.Model):
         partner_company_id = partner.company_id.id
         user_company_id = partner_company_id or self.env.company.id
         user_company_ids = [user_company_id]
-        eadu_contact = partner.child_ids.filtered(lambda p: p.eadu_url)
+        eadu_contact = partner.eadu_connection_partner_id
         if not eadu_contact:
             eadu_contact = self.env['res.partner'].search([('name', '=', "EADU" + partner.name), ('parent_id', '=', partner.id)], limit=1)
             if not eadu_contact:
@@ -93,12 +101,23 @@ class ResPartner(models.Model):
             if not eadu_user:        
                 eadu_user = self.env['res.users'].create({
                     'partner_id': eadu_contact.id,
-                    'login': "EADU" + self.name.strip().strip('#'),
+                    'login': self._get_unique_eadu_user_login(),
                     'group_ids': [Command.link(self.env.ref('eadu.group_portal_eadu').id)],
                     'company_id': user_company_id,
                     'company_ids': [Command.set(user_company_ids)],
                 })
         return eadu_contact
+
+    def _get_unique_eadu_user_login(self):
+        self.ensure_one()
+        base_login = "EADU" + (self.name or "").strip().strip('#')
+        login = base_login
+        index = 2
+        Users = self.env['res.users'].sudo()
+        while Users.search_count([('login', '=', login)]):
+            login = f"{base_login}-{index}"
+            index += 1
+        return login
  
     def _generate_eadu_key(self):
         """ Generate an API key for an EADU contact (with linked user)"""
@@ -356,7 +375,7 @@ class ResPartner(models.Model):
         }
         # If this partner belongs to another EADU instance, pass the cross-reference
         # so the remote can deduplicate.
-        partner_corresponding_eadu = self._get_eadu_partner()
+        partner_corresponding_eadu = self.eadu_connection_partner_id
         if partner_corresponding_eadu:
             epp = EaduAny._search_for_eadu_partner(
                 partner_corresponding_eadu, 'res.partner', self.id

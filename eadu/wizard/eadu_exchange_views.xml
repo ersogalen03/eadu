@@ -16,10 +16,15 @@
                 <sheet>
                     <group>
                         <field name="mode" widget="radio"/>
-                        <field name="partner_id" required="1"/>
+                        <field name="partner_id" invisible="create_partner"
+                            context="{'default_is_company': True, 'default_company_type': 'company'}"
+                            options="{'no_create': False, 'no_create_edit': False}"/>
+                        <field name="create_partner"/>
+                        <field name="partner_name" invisible="not create_partner"/>
                     </group>
                     <group invisible="mode != 'generate'">
-                        <field name="generated_token" placeholder="Generate a code, then send it to the other partner."/>
+                        <field name="generated_token" widget="CopyClipboardChar"
+                            placeholder="Generate a code, then send it to the other partner."/>
                     </group>
                     <group invisible="mode != 'receive'">
                         <field name="token" placeholder="Paste the EADU code you received"/>
@@ -45,6 +50,29 @@
         <field name="name">EADU Object Access</field>
         <field name="res_model">eadu.partner.any</field>
         <field name="view_mode">list,form</field>
+    </record>
+
+    <record id="action_eadu_contacts" model="ir.actions.act_window">
+        <field name="name">Contacts</field>
+        <field name="res_model">res.partner</field>
+        <field name="view_mode">kanban,list,form</field>
+        <field name="context">{'default_is_company': True, 'default_company_type': 'company'}</field>
+    </record>
+
+    <record id="action_eadu_partners" model="ir.actions.act_window">
+        <field name="name">EADU Partners</field>
+        <field name="res_model">res.partner</field>
+        <field name="view_mode">kanban,list,form</field>
+        <field name="domain">[('has_eadu_partner', '=', True), ('is_company', '=', True)]</field>
+        <field name="context">{'default_is_company': True, 'default_company_type': 'company'}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No EADU partners yet.
+            </p>
+            <p>
+                Partners appear here when their hierarchy contains an EADU contact.
+            </p>
+        </field>
     </record>
 
     <record id="view_eadu_partner_any_list" model="ir.ui.view">
@@ -83,21 +111,42 @@
 
     <menuitem id="menu_eadu_root"
         name="Eadu"
+        action="action_eadu_partners"
         groups="base.group_system"
         sequence="99"/>
 
-    <menuitem id="menu_eadu_exchange"
-        name="Connect"
+    <menuitem id="menu_eadu_partners"
+        name="EADU Partners"
         parent="menu_eadu_root"
-        action="action_eadu_exchange_wizard"
+        action="action_eadu_partners"
         groups="base.group_system"
         sequence="1"/>
+
+    <menuitem id="menu_eadu_contacts"
+        name="Contacts"
+        parent="menu_eadu_root"
+        action="action_eadu_contacts"
+        groups="base.group_system"
+        sequence="5"/>
 
     <menuitem id="menu_eadu_partner_any"
         name="Object Access"
         parent="menu_eadu_root"
         action="action_eadu_partner_any"
         groups="base.group_system"
+        sequence="10"/>
+
+    <menuitem id="menu_eadu_configuration"
+        name="Configuration"
+        parent="menu_eadu_root"
+        groups="base.group_system"
         sequence="90"/>
+
+    <menuitem id="menu_eadu_exchange"
+        name="Connect"
+        parent="menu_eadu_configuration"
+        action="action_eadu_exchange_wizard"
+        groups="base.group_system"
+        sequence="10"/>
 
 </odoo>

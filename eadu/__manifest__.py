@@ -15,7 +15,7 @@ On the partner fill in his URL and your id in his db.
         'security/groups.xml',
         'security/ir.model.access.csv',
         'data/ir_cron.xml',
-        'views/eadu_exchange_views.xml',
+        'wizard/eadu_exchange_views.xml',
         'views/res_partner_views.xml',
         'security/ir_rule.xml',
     ],

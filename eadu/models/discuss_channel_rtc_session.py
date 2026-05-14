@@ -325,7 +325,7 @@ class DiscussChannelRtcSession(models.Model):
         for member in self.channel_id.channel_member_ids.sudo():
             if member.id == self.channel_member_id.id:
                 continue
-            eadu_partner = member.partner_id._get_eadu_partner()
+            eadu_partner = member.partner_id.eadu_connection_partner_id
             if not eadu_partner:
                 continue
             channel_map = self.env["eadu.partner.any"].sudo()._search_for_eadu_partner(
@@ -537,7 +537,7 @@ class DiscussChannelRtcSession(models.Model):
         # the local user's own channel member and suppress ringing.
         member = channel.channel_member_ids.sudo().filtered(lambda m: m.partner_id.id == remote_member_id)
         if member:
-            eadu_owner = member[0].partner_id._get_eadu_partner()
+            eadu_owner = member[0].partner_id.eadu_connection_partner_id
             if eadu_owner and eadu_owner.id == eadu_partner.id:
                 _logger.info(
                     "eadu rtc: partner direct map eadu_partner=%s incoming_partner=%s member=%s members=%s",
@@ -623,7 +623,7 @@ class DiscussChannelRtcSession(models.Model):
                 "partner_id": member.partner_id.id,
                 "partner": member.partner_id.name,
                 "commercial_partner_id": member.partner_id.commercial_partner_id.id,
-                "eadu_partner": member.partner_id._get_eadu_partner().name,
+                "eadu_partner": member.partner_id.eadu_connection_partner_id.name,
                 "rtc_sessions": member.rtc_session_ids.ids,
                 "rtc_remote_sessions": member.rtc_session_ids.mapped("eadu_remote_session_id"),
                 "rtc_eadu_partners": member.rtc_session_ids.mapped("eadu_partner_id").mapped("name"),

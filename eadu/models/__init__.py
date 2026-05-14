@@ -1,5 +1,4 @@
 from . import res_partner
-from . import eadu_exchange_wizard
 from . import eadu_partner_any
 from . import res_users
 from . import mail_message

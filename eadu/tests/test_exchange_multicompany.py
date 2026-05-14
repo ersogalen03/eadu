@@ -787,6 +787,31 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertEqual(wizard.partner_id, local_partner_for_a)
         self.assertEqual(wizard.guessed_partner_id, local_partner_for_a)
 
+    def test_exchange_wizard_can_create_partner_before_generating(self):
+        wizard = self.env["eadu.exchange.wizard"].with_user(self.user_a).create({
+            "mode": "generate",
+            "create_partner": True,
+            "partner_name": "New EADU Partner",
+        })
+        wizard.action_generate()
+        self.assertTrue(wizard.partner_id)
+        self.assertEqual(wizard.partner_id.name, "New EADU Partner")
+        self.assertTrue(wizard.generated_token)
+
+    def test_exchange_wizard_can_create_partner_from_received_token(self):
+        token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        wizard = self.env["eadu.exchange.wizard"].with_user(self.user_b).create({
+            "mode": "receive",
+            "create_partner": True,
+            "token": token,
+        })
+        wizard._onchange_token()
+        self.assertEqual(wizard.partner_name, self.partner_a.name)
+        wizard.action_receive()
+        self.assertTrue(wizard.partner_id)
+        self.assertEqual(wizard.partner_id.name, self.partner_a.name)
+        self.assertTrue(wizard.partner_id._get_eadu_partner().eadu_url)
+
     def test_exchange_requires_settings_access(self):
         regular_user = self.ResUsers.create({
             "name": "EADU Regular User",

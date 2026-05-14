@@ -63,7 +63,7 @@ class MailMessage(models.Model):
 
             eadu_partners = self.env['res.partner']
             for partner in partners:
-                if eadu_p := partner._get_eadu_partner():
+                if eadu_p := partner.eadu_connection_partner_id:
                     eadu_partners |= eadu_p
 
             if not eadu_partners:
@@ -81,7 +81,7 @@ class MailMessage(models.Model):
             for eadu_partner in eadu_partners:
                 # 1. Ensure every channel member exists remotely.
                 for partner in partners:
-                    if partner._get_eadu_partner() == eadu_partner:
+                    if partner.eadu_connection_partner_id == eadu_partner:
                         continue
                     partner._eadu_ensure_remote_partner(eadu_partner)
 
@@ -289,7 +289,7 @@ class MailMessage(models.Model):
             channel = self.env['discuss.channel'].browse(res_id).sudo()
             partners = channel.channel_partner_ids
             for partner in partners:
-                eadu_partner_upd = partner._get_eadu_partner()
+                eadu_partner_upd = partner.eadu_connection_partner_id
                 if not eadu_partner_upd or eadu_partner_upd == eadu_contact:
                     continue
 
