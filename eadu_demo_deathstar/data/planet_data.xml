@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="base.main_company" model="res.company">
+            <field name="name">Deathstar Project Office</field>
+        </record>
+        <record id="base.main_partner" model="res.partner">
+            <field name="name">Deathstar Project Office</field>
+            <field name="street">1 Imperial Liaison Plaza</field>
+            <field name="city">The Hague</field>
+            <field name="zip">2511 BT</field>
+            <field name="country_id" ref="base.nl"/>
+            <field name="phone">+31 70 555 0180</field>
+            <field name="email">procurement@deathstar.example</field>
+            <field name="website">https://deathstar.example</field>
+            <field name="image_1920" type="base64" file="eadu_demo_deathstar/static/img/company.png"/>
+        </record>
+        <record id="base.partner_admin" model="res.partner">
+            <field name="name">Director Krennic</field>
+            <field name="email">director.krennic@deathstar.example</field>
+            <field name="phone">+31 70 555 0181</field>
+            <field name="image_1920" type="base64" file="eadu_demo_deathstar/static/img/admin_director_krennic.png"/>
+        </record>
+        <record id="base.user_admin" model="res.users">
+            <field name="name">Director Krennic</field>
+            <field name="image_1920" type="base64" file="eadu_demo_deathstar/static/img/admin_director_krennic.png"/>
+            <field name="signature" type="html"><div>Director Krennic, advanced systems procurement</div></field>
+        </record>
+        <record id="partner_station_yards" model="res.partner">
+            <field name="name">Orbital Station Yards</field>
+            <field name="is_company" eval="True"/>
+            <field name="street">88 Docking Ring</field>
+            <field name="city">The Hague</field>
+            <field name="country_id" ref="base.nl"/>
+            <field name="email">yards@deathstar.example</field>
+        </record>
+        <record id="partner_precision_lens" model="res.partner">
+            <field name="name">Meridian Precision Lensworks</field>
+            <field name="is_company" eval="True"/>
+            <field name="street">5 Optic Canal</field>
+            <field name="city">The Hague</field>
+            <field name="country_id" ref="base.nl"/>
+            <field name="email">lensworks@deathstar.example</field>
+        </record>
+
+        <record id="attr_component_class" model="product.attribute">
+            <field name="name">Component Class</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="class_panel" model="product.attribute.value">
+            <field name="name">Command Panel</field>
+            <field name="attribute_id" ref="attr_component_class"/>
+        </record>
+        <record id="class_conduit" model="product.attribute.value">
+            <field name="name">Power Conduit</field>
+            <field name="attribute_id" ref="attr_component_class"/>
+        </record>
+        <record id="class_mount" model="product.attribute.value">
+            <field name="name">Docking Mount</field>
+            <field name="attribute_id" ref="attr_component_class"/>
+        </record>
+
+        <record id="attr_material_grade" model="product.attribute">
+            <field name="name">Material Grade</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="grade_durasteel" model="product.attribute.value">
+            <field name="name">Black Durasteel</field>
+            <field name="attribute_id" ref="attr_material_grade"/>
+        </record>
+        <record id="grade_titanium" model="product.attribute.value">
+            <field name="name">Titanium Ceramic</field>
+            <field name="attribute_id" ref="attr_material_grade"/>
+        </record>
+        <record id="grade_obsidian" model="product.attribute.value">
+            <field name="name">Obsidian Composite</field>
+            <field name="attribute_id" ref="attr_material_grade"/>
+        </record>
+
+        <record id="attr_clearance" model="product.attribute">
+            <field name="name">Clearance Level</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="clearance_gray" model="product.attribute.value">
+            <field name="name">Gray Routine</field>
+            <field name="attribute_id" ref="attr_clearance"/>
+        </record>
+        <record id="clearance_black" model="product.attribute.value">
+            <field name="name">Black Project</field>
+            <field name="attribute_id" ref="attr_clearance"/>
+        </record>
+        <record id="clearance_director" model="product.attribute.value">
+            <field name="name">Director Eyes Only</field>
+            <field name="attribute_id" ref="attr_clearance"/>
+        </record>
+
+        <record id="attr_lens_focus" model="product.attribute">
+            <field name="name">Lens Focus</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="focus_narrow" model="product.attribute.value">
+            <field name="name">Narrow Alignment</field>
+            <field name="attribute_id" ref="attr_lens_focus"/>
+        </record>
+        <record id="focus_broad" model="product.attribute.value">
+            <field name="name">Broad Assembly</field>
+            <field name="attribute_id" ref="attr_lens_focus"/>
+        </record>
+        <record id="focus_calibration" model="product.attribute.value">
+            <field name="name">Calibration Prism</field>
+            <field name="attribute_id" ref="attr_lens_focus"/>
+        </record>
+
+        <record id="product_command_components" model="product.template">
+            <field name="name">Station Command Component Kit</field>
+            <field name="type">consu</field>
+            <field name="categ_id" ref="product.product_category_goods"/>
+            <field name="standard_price">850.00</field>
+            <field name="list_price">1325.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_deathstar/static/img/product_components.png"/>
+            <field name="description_sale">Modular station components for command rooms, hangar interfaces, and high-security infrastructure.</field>
+            <field name="attribute_line_ids" eval="[
+                Command.create({'attribute_id': ref('attr_component_class'), 'value_ids': [Command.set([ref('class_panel'), ref('class_conduit'), ref('class_mount')])]}),
+                Command.create({'attribute_id': ref('attr_material_grade'), 'value_ids': [Command.set([ref('grade_durasteel'), ref('grade_titanium'), ref('grade_obsidian')])]}),
+                Command.create({'attribute_id': ref('attr_clearance'), 'value_ids': [Command.set([ref('clearance_gray'), ref('clearance_black'), ref('clearance_director')])]})
+            ]"/>
+        </record>
+        <record id="product_precision_lens" model="product.template">
+            <field name="name">Precision Alignment Lens</field>
+            <field name="type">consu</field>
+            <field name="categ_id" ref="product.product_category_goods"/>
+            <field name="standard_price">2750.00</field>
+            <field name="list_price">4100.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_deathstar/static/img/product_components.png"/>
+            <field name="description_sale">High-tolerance lens assembly for synchronized energy systems and station-scale optical calibration.</field>
+            <field name="attribute_line_ids" eval="[
+                Command.create({'attribute_id': ref('attr_lens_focus'), 'value_ids': [Command.set([ref('focus_narrow'), ref('focus_broad'), ref('focus_calibration')])]}),
+                Command.create({'attribute_id': ref('attr_material_grade'), 'value_ids': [Command.set([ref('grade_titanium'), ref('grade_obsidian')])]}),
+                Command.create({'attribute_id': ref('attr_clearance'), 'value_ids': [Command.set([ref('clearance_black'), ref('clearance_director')])]})
+            ]"/>
+        </record>
+        <record id="product_station_procurement_review" model="product.template">
+            <field name="name">Station Procurement Compliance Review</field>
+            <field name="type">service</field>
+            <field name="categ_id" ref="product.product_category_services"/>
+            <field name="standard_price">650.00</field>
+            <field name="list_price">980.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_deathstar/static/img/product_components.png"/>
+            <field name="description_sale">Review service for clearance routing, vendor chain-of-custody, and project audit trails.</field>
+        </record>
+    </data>
+</odoo>

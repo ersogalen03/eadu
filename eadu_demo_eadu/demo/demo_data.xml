@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="base.partner_admin" model="res.partner">
+            <field name="name">Galen Erso</field>
+            <field name="email">galen.erso@eadu.example</field>
+            <field name="phone">+354 555 0141</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/admin_galen_erso.png"/>
+        </record>
+        <record id="base.user_admin" model="res.users">
+            <field name="name">Galen Erso</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/admin_galen_erso.png"/>
+            <field name="signature" type="html"><div>Galen Erso, kyber refinement lead</div></field>
+        </record>
+        <record id="base.partner_demo" model="res.partner">
+            <field name="name">Lyra Station Clerk</field>
+            <field name="email">lyra.clerk@eadu.example</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/demo_lyra_clerk.png"/>
+        </record>
+        <record id="base.user_demo" model="res.users">
+            <field name="name">Lyra Station Clerk</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/demo_lyra_clerk.png"/>
+            <field name="signature" type="html"><div>Lyra Station Clerk, refinery inventory desk</div></field>
+        </record>
+    </data>
+</odoo>

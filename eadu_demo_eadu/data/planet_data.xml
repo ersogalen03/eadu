@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="base.main_company" model="res.company">
+            <field name="name">Eadu Kyber Refinery Embassy</field>
+        </record>
+        <record id="base.main_partner" model="res.partner">
+            <field name="name">Eadu Kyber Refinery Embassy</field>
+            <field name="street">7 Stormwatch Ridge</field>
+            <field name="city">Reykjavik</field>
+            <field name="zip">101</field>
+            <field name="country_id" ref="base.is"/>
+            <field name="phone">+354 555 0140</field>
+            <field name="email">refinery@eadu.example</field>
+            <field name="website">https://eadu.example</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/company.png"/>
+        </record>
+        <record id="base.partner_admin" model="res.partner">
+            <field name="name">Galen Erso</field>
+            <field name="email">galen.erso@eadu.example</field>
+            <field name="phone">+354 555 0141</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/admin_galen_erso.png"/>
+        </record>
+        <record id="base.user_admin" model="res.users">
+            <field name="name">Galen Erso</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/admin_galen_erso.png"/>
+            <field name="signature" type="html"><div>Galen Erso, kyber refinement lead</div></field>
+        </record>
+        <record id="partner_crystal_lab" model="res.partner">
+            <field name="name">Storm Peak Crystal Lab</field>
+            <field name="is_company" eval="True"/>
+            <field name="street">2 Condenser Road</field>
+            <field name="city">Reykjavik</field>
+            <field name="country_id" ref="base.is"/>
+            <field name="email">lab@eadu.example</field>
+        </record>
+        <record id="partner_containment" model="res.partner">
+            <field name="name">Eadu Containment Works</field>
+            <field name="is_company" eval="True"/>
+            <field name="street">19 Shielded Bay</field>
+            <field name="city">Reykjavik</field>
+            <field name="country_id" ref="base.is"/>
+            <field name="email">containment@eadu.example</field>
+        </record>
+
+        <record id="attr_kyber_type" model="product.attribute">
+            <field name="name">Kyber Type</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="kyber_clear" model="product.attribute.value">
+            <field name="name">Clear Lattice</field>
+            <field name="attribute_id" ref="attr_kyber_type"/>
+        </record>
+        <record id="kyber_blue" model="product.attribute.value">
+            <field name="name">Blue Resonant</field>
+            <field name="attribute_id" ref="attr_kyber_type"/>
+        </record>
+        <record id="kyber_green" model="product.attribute.value">
+            <field name="name">Green Harmonic</field>
+            <field name="attribute_id" ref="attr_kyber_type"/>
+        </record>
+
+        <record id="attr_refinement" model="product.attribute">
+            <field name="name">Refinement Grade</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="grade_raw" model="product.attribute.value">
+            <field name="name">Raw Washed</field>
+            <field name="attribute_id" ref="attr_refinement"/>
+        </record>
+        <record id="grade_stabilized" model="product.attribute.value">
+            <field name="name">Stabilized</field>
+            <field name="attribute_id" ref="attr_refinement"/>
+        </record>
+        <record id="grade_focused" model="product.attribute.value">
+            <field name="name">Focused Beamline</field>
+            <field name="attribute_id" ref="attr_refinement"/>
+        </record>
+
+        <record id="attr_containment" model="product.attribute">
+            <field name="name">Containment Class</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="containment_glass" model="product.attribute.value">
+            <field name="name">Glass Ampoule</field>
+            <field name="attribute_id" ref="attr_containment"/>
+        </record>
+        <record id="containment_field" model="product.attribute.value">
+            <field name="name">Field-Sealed Canister</field>
+            <field name="attribute_id" ref="attr_containment"/>
+        </record>
+        <record id="containment_vault" model="product.attribute.value">
+            <field name="name">Vault Cartridge</field>
+            <field name="attribute_id" ref="attr_containment"/>
+        </record>
+
+        <record id="attr_resonance" model="product.attribute">
+            <field name="name">Resonance Band</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="res_low" model="product.attribute.value">
+            <field name="name">Low Hum</field>
+            <field name="attribute_id" ref="attr_resonance"/>
+        </record>
+        <record id="res_mid" model="product.attribute.value">
+            <field name="name">Mid Song</field>
+            <field name="attribute_id" ref="attr_resonance"/>
+        </record>
+        <record id="res_high" model="product.attribute.value">
+            <field name="name">High Chorus</field>
+            <field name="attribute_id" ref="attr_resonance"/>
+        </record>
+
+        <record id="product_refined_kyber" model="product.template">
+            <field name="name">Refined Kyber Crystal</field>
+            <field name="type">consu</field>
+            <field name="categ_id" ref="product.product_category_goods"/>
+            <field name="standard_price">950.00</field>
+            <field name="list_price">1450.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/product_kyber.png"/>
+            <field name="description_sale">Catalogued crystal shipment with resonance report, containment log, and refinement history.</field>
+            <field name="attribute_line_ids" eval="[
+                Command.create({'attribute_id': ref('attr_kyber_type'), 'value_ids': [Command.set([ref('kyber_clear'), ref('kyber_blue'), ref('kyber_green')])]}),
+                Command.create({'attribute_id': ref('attr_refinement'), 'value_ids': [Command.set([ref('grade_raw'), ref('grade_stabilized'), ref('grade_focused')])]}),
+                Command.create({'attribute_id': ref('attr_containment'), 'value_ids': [Command.set([ref('containment_glass'), ref('containment_field'), ref('containment_vault')])]})
+            ]"/>
+        </record>
+        <record id="product_resonance_matrix" model="product.template">
+            <field name="name">Kyber Resonance Matrix</field>
+            <field name="type">consu</field>
+            <field name="categ_id" ref="product.product_category_goods"/>
+            <field name="standard_price">4200.00</field>
+            <field name="list_price">6900.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/product_kyber.png"/>
+            <field name="description_sale">Calibrated matrix for peaceful high-energy research and long-range signal studies.</field>
+            <field name="attribute_line_ids" eval="[
+                Command.create({'attribute_id': ref('attr_kyber_type'), 'value_ids': [Command.set([ref('kyber_clear'), ref('kyber_blue')])]}),
+                Command.create({'attribute_id': ref('attr_resonance'), 'value_ids': [Command.set([ref('res_low'), ref('res_mid'), ref('res_high')])]}),
+                Command.create({'attribute_id': ref('attr_containment'), 'value_ids': [Command.set([ref('containment_field'), ref('containment_vault')])]})
+            ]"/>
+        </record>
+        <record id="product_refinery_audit" model="product.template">
+            <field name="name">Kyber Refinery Safety Audit</field>
+            <field name="type">service</field>
+            <field name="categ_id" ref="product.product_category_services"/>
+            <field name="standard_price">1200.00</field>
+            <field name="list_price">1800.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/product_kyber.png"/>
+            <field name="description_sale">Audit of weather exposure, resonance drift, containment seals, and ethical export controls.</field>
+        </record>
+    </data>
+</odoo>

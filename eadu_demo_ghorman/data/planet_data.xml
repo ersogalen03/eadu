@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="base.main_company" model="res.company">
+            <field name="name">Ghorman Textile Embassy</field>
+        </record>
+        <record id="base.main_partner" model="res.partner">
+            <field name="name">Ghorman Textile Embassy</field>
+            <field name="street">22 Rue des Tisserands Stellaires</field>
+            <field name="city">Brussels</field>
+            <field name="zip">1000</field>
+            <field name="country_id" ref="base.be"/>
+            <field name="phone">+32 2 555 0131</field>
+            <field name="email">embassy@ghorman.example</field>
+            <field name="website">https://ghorman.example</field>
+            <field name="image_1920" type="base64" file="eadu_demo_ghorman/static/img/company.png"/>
+        </record>
+        <record id="base.partner_admin" model="res.partner">
+            <field name="name">Talia Venn</field>
+            <field name="email">talia.venn@ghorman.example</field>
+            <field name="phone">+32 2 555 0132</field>
+            <field name="image_1920" type="base64" file="eadu_demo_ghorman/static/img/admin_talia_venn.png"/>
+        </record>
+        <record id="base.user_admin" model="res.users">
+            <field name="name">Talia Venn</field>
+            <field name="image_1920" type="base64" file="eadu_demo_ghorman/static/img/admin_talia_venn.png"/>
+            <field name="signature" type="html"><div>Talia Venn, Ghorman Trade Steward</div></field>
+        </record>
+        <record id="partner_silk_guild" model="res.partner">
+            <field name="name">Ghorman Silk Guild</field>
+            <field name="is_company" eval="True"/>
+            <field name="street">14 Loom Court</field>
+            <field name="city">Ghorman City Annex, Brussels</field>
+            <field name="country_id" ref="base.be"/>
+            <field name="email">guild@ghorman.example</field>
+        </record>
+        <record id="partner_dye_house" model="res.partner">
+            <field name="name">Aurodium Dye House</field>
+            <field name="is_company" eval="True"/>
+            <field name="street">9 Chromalane</field>
+            <field name="city">Ghorman City Annex, Brussels</field>
+            <field name="country_id" ref="base.be"/>
+            <field name="email">dyes@ghorman.example</field>
+        </record>
+
+        <record id="attr_fiber" model="product.attribute">
+            <field name="name">Ghorman Fiber</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="fiber_cloud_silk" model="product.attribute.value">
+            <field name="name">Cloud Silk</field>
+            <field name="attribute_id" ref="attr_fiber"/>
+        </record>
+        <record id="fiber_rain_linen" model="product.attribute.value">
+            <field name="name">Rain Linen</field>
+            <field name="attribute_id" ref="attr_fiber"/>
+        </record>
+        <record id="fiber_ash_cotton" model="product.attribute.value">
+            <field name="name">Ash Cotton</field>
+            <field name="attribute_id" ref="attr_fiber"/>
+        </record>
+
+        <record id="attr_weave" model="product.attribute">
+            <field name="name">Weave Pattern</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="weave_plain" model="product.attribute.value">
+            <field name="name">Plain Diplomatic</field>
+            <field name="attribute_id" ref="attr_weave"/>
+        </record>
+        <record id="weave_twill" model="product.attribute.value">
+            <field name="name">Twill Senate</field>
+            <field name="attribute_id" ref="attr_weave"/>
+        </record>
+        <record id="weave_jacquard" model="product.attribute.value">
+            <field name="name">Jacquard Memorial</field>
+            <field name="attribute_id" ref="attr_weave"/>
+        </record>
+
+        <record id="attr_dye" model="product.attribute">
+            <field name="name">Dye Bath</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="dye_ochre" model="product.attribute.value">
+            <field name="name">Old Republic Ochre</field>
+            <field name="attribute_id" ref="attr_dye"/>
+        </record>
+        <record id="dye_blue" model="product.attribute.value">
+            <field name="name">Rain Blue</field>
+            <field name="attribute_id" ref="attr_dye"/>
+        </record>
+        <record id="dye_ivory" model="product.attribute.value">
+            <field name="name">Embassy Ivory</field>
+            <field name="attribute_id" ref="attr_dye"/>
+        </record>
+
+        <record id="attr_yarn_twist" model="product.attribute">
+            <field name="name">Yarn Twist</field>
+            <field name="create_variant">always</field>
+        </record>
+        <record id="twist_s" model="product.attribute.value">
+            <field name="name">S-Twist Fine</field>
+            <field name="attribute_id" ref="attr_yarn_twist"/>
+        </record>
+        <record id="twist_z" model="product.attribute.value">
+            <field name="name">Z-Twist Strong</field>
+            <field name="attribute_id" ref="attr_yarn_twist"/>
+        </record>
+        <record id="twist_balanced" model="product.attribute.value">
+            <field name="name">Balanced Diplomatic</field>
+            <field name="attribute_id" ref="attr_yarn_twist"/>
+        </record>
+
+        <record id="product_ghorman_fabric" model="product.template">
+            <field name="name">Ghorman Ceremonial Fabric Bolt</field>
+            <field name="type">consu</field>
+            <field name="categ_id" ref="product.product_category_goods"/>
+            <field name="standard_price">72.00</field>
+            <field name="list_price">128.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_ghorman/static/img/product_textiles.png"/>
+            <field name="description_sale">Formal Ghorman fabric sold by the bolt for embassy robes, civic banners, and high-trust trade gifts.</field>
+            <field name="attribute_line_ids" eval="[
+                Command.create({'attribute_id': ref('attr_fiber'), 'value_ids': [Command.set([ref('fiber_cloud_silk'), ref('fiber_rain_linen'), ref('fiber_ash_cotton')])]}),
+                Command.create({'attribute_id': ref('attr_weave'), 'value_ids': [Command.set([ref('weave_plain'), ref('weave_twill'), ref('weave_jacquard')])]}),
+                Command.create({'attribute_id': ref('attr_dye'), 'value_ids': [Command.set([ref('dye_ochre'), ref('dye_blue'), ref('dye_ivory')])]})
+            ]"/>
+        </record>
+        <record id="product_ghorman_yarn" model="product.template">
+            <field name="name">Ghorman Spun Yarn Cone</field>
+            <field name="type">consu</field>
+            <field name="categ_id" ref="product.product_category_goods"/>
+            <field name="standard_price">18.50</field>
+            <field name="list_price">34.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_ghorman/static/img/product_textiles.png"/>
+            <field name="description_sale">High-tension yarn for precision looms, tailored to interplanetary garment houses.</field>
+            <field name="attribute_line_ids" eval="[
+                Command.create({'attribute_id': ref('attr_fiber'), 'value_ids': [Command.set([ref('fiber_cloud_silk'), ref('fiber_rain_linen')])]}),
+                Command.create({'attribute_id': ref('attr_yarn_twist'), 'value_ids': [Command.set([ref('twist_s'), ref('twist_z'), ref('twist_balanced')])]}),
+                Command.create({'attribute_id': ref('attr_dye'), 'value_ids': [Command.set([ref('dye_ochre'), ref('dye_blue'), ref('dye_ivory')])]})
+            ]"/>
+        </record>
+        <record id="product_ghorman_quality_service" model="product.template">
+            <field name="name">Textile Provenance Audit</field>
+            <field name="type">service</field>
+            <field name="categ_id" ref="product.product_category_services"/>
+            <field name="standard_price">240.00</field>
+            <field name="list_price">390.00</field>
+            <field name="image_1920" type="base64" file="eadu_demo_ghorman/static/img/product_textiles.png"/>
+            <field name="description_sale">Certification service for fiber origin, dye stability, loom batch, and diplomatic export readiness.</field>
+        </record>
+    </data>
+</odoo>
