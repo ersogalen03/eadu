@@ -199,6 +199,23 @@ class ResPartner(models.Model):
     def _process_eadu_exchange_token(self, token):
         self.ensure_one()
         self._check_eadu_exchange_access()
+        return self.sudo()._process_eadu_exchange_token_sudo(token, self.env.user)
+
+    def _process_eadu_exchange_token_from_portal(self, token, portal_user):
+        self.ensure_one()
+        if not portal_user or portal_user._is_public():
+            raise AccessError(_("You must be logged in to connect EADU."))
+        if not portal_user.has_group("base.group_portal"):
+            raise AccessError(_("Only portal users can connect EADU from the portal."))
+
+        portal_partner = portal_user.partner_id.commercial_partner_id
+        if portal_partner.id != self.commercial_partner_id.id:
+            raise AccessError(_("You can only connect EADU for your own company."))
+
+        return self.sudo()._process_eadu_exchange_token_sudo(token, portal_user)
+
+    def _process_eadu_exchange_token_sudo(self, token, connecting_user=None):
+        self.ensure_one()
         con_data = self._decode_eadu_exchange_token(token)
 
         eadu_contact = self._create_update_eadu_child_partner()
@@ -214,7 +231,7 @@ class ResPartner(models.Model):
             con_data['user_name'],
             remote_partner_id,
         )
-        cuser = self.env.user
+        cuser = connecting_user or self.env.user
         res = eadu_contact._eadu_call('res.partner', 'action_connect_eadu', {
             'apikey': apikey,
             'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url'),

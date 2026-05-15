@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <template id="portal_my_home_eadu" name="EADU Connection" customize_show="True" inherit_id="portal.portal_my_home" priority="60">
+        <xpath expr="//div[@id='portal_common_category']" position="inside">
+            <t t-call="portal.portal_docs_entry">
+                <t t-set="icon" t-value="'/portal/static/src/img/portal-connection.svg'"/>
+                <t t-set="title">EADU</t>
+                <t t-set="url" t-value="'/my/eadu'"/>
+                <t t-set="eadu_connection" t-value="request.env.user.partner_id.commercial_partner_id.sudo().eadu_connection_partner_id"/>
+                <t t-set="text" t-value="'EADU is connected to your Odoo database.' if eadu_connection else 'Using Odoo yourself? Connect EADU and work from your own database instead of this portal.'"/>
+                <t t-set="config_card" t-value="True"/>
+            </t>
+        </xpath>
+    </template>
+
+    <template id="portal_breadcrumbs_eadu" name="Portal layout: EADU breadcrumbs" inherit_id="portal.portal_breadcrumbs" priority="60">
+        <xpath expr="//ol[hasclass('o_portal_submenu')]" position="inside">
+            <li t-if="page_name == 'eadu'" class="breadcrumb-item active">
+                EADU
+            </li>
+        </xpath>
+    </template>
+
+    <template id="portal_my_eadu" name="My EADU Connection">
+        <t t-call="portal.portal_layout">
+            <t t-set="breadcrumbs_searchbar" t-value="True"/>
+
+            <t t-call="portal.portal_searchbar">
+                <t t-set="title">EADU</t>
+            </t>
+
+            <div class="row justify-content-center">
+                <div class="col-12 col-lg-8">
+                    <div t-if="error" class="alert alert-danger" role="alert">
+                        <t t-out="error"/>
+                    </div>
+                    <div t-if="success" class="alert alert-success" role="alert">
+                        <t t-out="success"/>
+                    </div>
+
+                    <div t-if="not eadu_partner" class="mb-4">
+                        <p>
+                            Using Odoo yourself with
+                            <a href="https://github.com/ersogalen03/eadu" target="_blank" rel="noopener">EADU</a>?
+                            Exchange your token here.
+                        </p>
+                        <p class="text-muted mb-0">
+                            This portal account is linked to <strong t-out="partner.display_name"/>.
+                            The EADU connection will be created for that company.
+                        </p>
+                    </div>
+
+                    <div t-if="eadu_partner" class="mb-4">
+                        <p class="text-muted mb-0">
+                            This portal account is linked to <strong t-out="partner.display_name"/>.
+                            EADU is already connected, so you can work from your own Odoo database.
+                        </p>
+                    </div>
+
+                    <div t-if="eadu_partner" class="alert alert-info" role="status">
+                        Connected to
+                        <strong t-out="eadu_partner.eadu_db or eadu_partner.display_name"/>
+                        <span t-if="eadu_partner.eadu_url">
+                            at <span t-out="eadu_partner.eadu_url"/>
+                        </span>.
+                    </div>
+
+                    <form t-if="not eadu_partner" method="post" action="/my/eadu" class="o_portal_eadu_exchange">
+                        <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                        <div class="mb-3">
+                            <label for="eadu_token" class="form-label">EADU token</label>
+                            <textarea id="eadu_token" name="token" class="form-control" rows="7" required="required"><t t-out="token"/></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Connect EADU</button>
+                    </form>
+                </div>
+            </div>
+        </t>
+    </template>
+
+</odoo>

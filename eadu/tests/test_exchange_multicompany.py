@@ -827,6 +827,31 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
                 "partner_id": self.partner_a.id,
             })
 
+    def test_portal_user_can_receive_token_for_own_commercial_partner_only(self):
+        token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        portal_contact = self.ResPartner.create({
+            "name": "Portal Contact B",
+            "email": "portal_contact_b@example.com",
+            "parent_id": self.partner_b.id,
+            "company_type": "person",
+        })
+        portal_user = self.ResUsers.create({
+            "name": "Portal Contact B",
+            "login": "portal_contact_b_eadu_test",
+            "email": "portal_contact_b@example.com",
+            "partner_id": portal_contact.id,
+            "company_id": self.company_b.id,
+            "company_ids": [(6, 0, [self.company_b.id])],
+            "group_ids": [(6, 0, [self.env.ref("base.group_portal").id])],
+        })
+
+        self.partner_b.sudo()._process_eadu_exchange_token_from_portal(token, portal_user)
+        self.assertTrue(self.partner_b._get_eadu_partner().eadu_url)
+
+        other_token = self.partner_b.with_user(self.user_b)._generate_eadu_exchange()
+        with self.assertRaises(AccessError):
+            self.partner_a.sudo()._process_eadu_exchange_token_from_portal(other_token, portal_user)
+
     def test_rewrite_oe_links_remaps_known_ids(self):
         """
         After an exchange, ``_rewrite_oe_links`` replaces ``data-oe-id``

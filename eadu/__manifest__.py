@@ -10,6 +10,7 @@ On the partner fill in his URL and your id in his db.
     'version': '0.1',
     'depends': [
         'mail',
+        'portal',
     ],
     'data': [
         'security/groups.xml',
@@ -17,6 +18,7 @@ On the partner fill in his URL and your id in his db.
         'data/ir_cron.xml',
         'wizard/eadu_exchange_views.xml',
         'views/res_partner_views.xml',
+        'views/portal_templates.xml',
         'security/ir_rule.xml',
     ],
     'assets': {
