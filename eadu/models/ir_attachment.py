@@ -17,19 +17,42 @@ class IrAttachment(models.Model):
         return vals
 
     def _eadu_update_field_names(self):
-        return ['name', 'mimetype', 'datas']
+        return ['name', 'mimetype', 'datas', 'res_model', 'res_id']
 
-    def _eadu_prepare_update_fields(self, field_names=None):
+    def _eadu_prepare_update_fields(self, eadu_partner=None, field_names=None):
         allowed_fields = self._eadu_update_field_names()
         if field_names is not None:
             field_names = set(field_names)
             allowed_fields = [field for field in allowed_fields if field in field_names]
-        return self.env['eadu.partner.any'].sudo()._serialize_fields(self, allowed_fields)
+        fields_to_serialize = [field for field in allowed_fields if field not in {'res_model', 'res_id'}]
+        vals = self.env['eadu.partner.any'].sudo()._serialize_fields(self, fields_to_serialize)
+        if {'res_model', 'res_id'} & set(allowed_fields):
+            vals['res_model'] = self.res_model or None
+            vals['res_id'] = None
+            if eadu_partner and self.res_model and self.res_id:
+                target_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                    eadu_partner, self.res_model, self.res_id
+                )
+                if target_map and target_map.eadu_ident:
+                    vals['res_id'] = target_map.eadu_ident
+        return vals
 
     def _eadu_send_update(self, eadu_any, field_names=None):
         self.ensure_one()
-        vals = self._eadu_prepare_update_fields(field_names)
+        vals = self._eadu_prepare_update_fields(eadu_any.partner_id, field_names)
         if vals:
+            ident_placeholders = {}
+            if (
+                {'res_model', 'res_id'} & set(field_names or [])
+                and self.res_model
+                and self.res_id
+                and not vals.get('res_id')
+            ):
+                target_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                    eadu_any.partner_id, self.res_model, self.res_id
+                )
+                if target_map:
+                    ident_placeholders['res_id'] = target_map.id
             self.env['eadu.partner.any'].sudo()._send_or_queue(
                 eadu_any.partner_id,
                 'ir.attachment',
@@ -39,6 +62,7 @@ class IrAttachment(models.Model):
                     'fields': vals,
                 },
                 eadu_any_ref=eadu_any,
+                ident_placeholders=ident_placeholders,
             )
 
     def _eadu_sync_created_or_updated(self, vals):
@@ -49,12 +73,11 @@ class IrAttachment(models.Model):
         attachment = self
         res_model = vals.get('res_model') or attachment.res_model
         res_id = vals.get('res_id') or attachment.res_id
-        target_models = {'mail.message'}
-        if res_model and res_id and res_model in target_models:
+        if res_model and res_id:
             eadu_anys = self.env['eadu.partner.any'].sudo().search([
                 ('res_model', '=', res_model), ('res_id', '=', res_id)
             ])
-            message = self.env['mail.message'].sudo().browse(res_id)
+            message = self.env['mail.message'].sudo().browse(res_id) if res_model == 'mail.message' else False
 
             for eadu_any in eadu_anys:
                 eadu_contact = eadu_any.partner_id
@@ -86,6 +109,8 @@ class IrAttachment(models.Model):
                         partner_master=False,
                         ident_placeholders=msg_placeholder,
                     )
+                else:
+                    attachment._eadu_send_update(existing_att, {'res_model', 'res_id'})
                 if message:
                     message._eadu_send_update(eadu_any, {'attachment_ids'})
 
@@ -111,11 +136,11 @@ class IrAttachment(models.Model):
             changed_fields = set(vals) & set(self._eadu_update_field_names())
             for att in self:
                 # Perform same sync as in create
-                linked_to_message = (
+                linked_to_synced_record = (
                     ('res_model' in vals or 'res_id' in vals)
-                    and (vals.get('res_model') or att.res_model) in {'mail.message'}
+                    and bool(vals.get('res_model') or att.res_model)
                 )
-                if linked_to_message:
+                if linked_to_synced_record:
                     att._eadu_sync_created_or_updated(vals)
                 if changed_fields:
                     eadu_anys = EaduAny.search([
@@ -125,7 +150,7 @@ class IrAttachment(models.Model):
                     for eadu_any in eadu_anys:
                         att._eadu_send_update(eadu_any, changed_fields)
                 if att.res_model == 'mail.message' and att.res_id:
-                    if not linked_to_message:
+                    if not linked_to_synced_record:
                         message = self.env['mail.message'].sudo().browse(att.res_id)
                         eadu_anys = EaduAny.search([
                             ('res_model', '=', 'mail.message'),
@@ -184,6 +209,14 @@ class IrAttachment(models.Model):
         if not eadu_any:
             return {'result': False}
         vals = self._eadu_update_values_from_fields(fields)
+        if fields and {'res_model', 'res_id'} & set(fields):
+            vals['res_model'] = fields.get('res_model') or False
+            vals['res_id'] = False
+            if fields.get('res_model') and fields.get('res_id'):
+                target_map = self.env['eadu.partner.any']._search_for_eadu_partner(
+                    eadu_contact, fields['res_model'], fields['res_id']
+                )
+                vals['res_id'] = target_map.res_id if target_map else False
         if vals:
             eadu_any._get_record().sudo().with_context(eadu_message=True).write(vals)
         return {'result': True}

@@ -508,6 +508,92 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             ("pending_calls", "!=", False),
         ]))
 
+    def test_channel_subthread_reply_syncs_parent_message(self):
+        """A reply/subthread message keeps its parent mapping on the remote side."""
+        _eadu_contact_b, channel_a, message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Subthread Message Channel",
+            "Parent message for subthread",
+        )
+
+        reply_a = channel_a.with_user(self.user_a).message_post(
+            body="Subthread reply from A",
+            message_type="comment",
+            parent_id=message_a.id,
+        )
+
+        reply_map = self.env["eadu.partner.any"].sudo().search([
+            ("res_model", "=", "mail.message"),
+            ("res_id", "=", reply_a.id),
+        ], limit=1)
+        self.assertTrue(reply_map)
+        reply_b = self.env["mail.message"].sudo().browse(reply_map.eadu_ident)
+        self.assertTrue(reply_b.exists())
+        self.assertEqual(reply_b.parent_id.id, message_b.id)
+        self.assertIn("Subthread reply from A", self._message_body_from_db(reply_b))
+
+    def test_attachment_on_synced_non_message_record_syncs_related_model(self):
+        """Attachments follow any already-synced target record, not only mail.message."""
+        self._do_ab_exchange()
+        eadu_contact_b = self.partner_a._get_eadu_partner()
+        EaduAny = self.env["eadu.partner.any"].sudo()
+        local_partner = self.user_a.partner_id
+        partner_map = EaduAny._search_for_eadu_partner(
+            eadu_contact_b, "res.partner", local_partner.id
+        )
+        self.assertTrue(partner_map)
+        self.assertTrue(partner_map.eadu_ident)
+
+        attachment_a = self.env["ir.attachment"].with_user(self.user_a).sudo().create({
+            "name": "partner-related-file.txt",
+            "datas": base64.b64encode(b"partner related attachment"),
+            "mimetype": "text/plain",
+            "res_model": "res.partner",
+            "res_id": local_partner.id,
+        })
+
+        attachment_map = EaduAny._search_for_eadu_partner(
+            eadu_contact_b, "ir.attachment", attachment_a.id
+        )
+        self.assertTrue(attachment_map)
+        self.assertTrue(attachment_map.eadu_ident)
+        attachment_b = self.env["ir.attachment"].sudo().browse(attachment_map.eadu_ident)
+        self.assertEqual(attachment_b.res_model, "res.partner")
+        self.assertEqual(attachment_b.res_id, partner_map.eadu_ident)
+        self.assertEqual(attachment_b.name, "partner-related-file.txt")
+
+    def test_attachment_later_linked_to_synced_record_syncs_related_model(self):
+        """An existing file linked later to a synced record is pushed to the remote target."""
+        self._do_ab_exchange()
+        eadu_contact_b = self.partner_a._get_eadu_partner()
+        EaduAny = self.env["eadu.partner.any"].sudo()
+        local_partner = self.user_a.partner_id
+        partner_map = EaduAny._search_for_eadu_partner(
+            eadu_contact_b, "res.partner", local_partner.id
+        )
+        self.assertTrue(partner_map)
+
+        attachment_a = self.env["ir.attachment"].with_user(self.user_a).sudo().create({
+            "name": "later-linked-partner-file.txt",
+            "datas": base64.b64encode(b"later linked partner attachment"),
+            "mimetype": "text/plain",
+        })
+        self.assertFalse(EaduAny._search_for_eadu_partner(
+            eadu_contact_b, "ir.attachment", attachment_a.id
+        ))
+
+        attachment_a.write({
+            "res_model": "res.partner",
+            "res_id": local_partner.id,
+        })
+
+        attachment_map = EaduAny._search_for_eadu_partner(
+            eadu_contact_b, "ir.attachment", attachment_a.id
+        )
+        self.assertTrue(attachment_map)
+        attachment_b = self.env["ir.attachment"].sudo().browse(attachment_map.eadu_ident)
+        self.assertEqual(attachment_b.res_model, "res.partner")
+        self.assertEqual(attachment_b.res_id, partner_map.eadu_ident)
+
     def test_concurrent_message_edits_resend_last_update_after_bilateral_partition(self):
         """Queued isolated body edits replayed out of order resend the latest body."""
         eadu_contact_b, channel_a, message_a, message_b = self._create_synced_ab_channel_message(

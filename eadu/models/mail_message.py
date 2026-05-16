@@ -106,6 +106,18 @@ class MailMessage(models.Model):
 
         return remote_att_ids, att_any_ids, has_queued_att
 
+    def _eadu_add_parent_mapping_to_payload(self, message, eadu_partner, payload, ident_placeholders):
+        if not message.parent_id:
+            return
+        parent_map = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+            eadu_partner, 'mail.message', message.parent_id.id
+        )
+        if not parent_map:
+            return
+        payload['parent_id'] = parent_map.eadu_ident or None
+        if not parent_map.eadu_ident:
+            ident_placeholders['parent_id'] = parent_map.id
+
     def _eadu_update_field_names(self):
         return ['body', 'attachment_ids']
 
@@ -309,6 +321,9 @@ class MailMessage(models.Model):
                         payload = dict(item['payload'])
                         item_placeholders = dict(item.get('ident_placeholders') or {})
                         payload['eadu_ident'] = created_record.id
+                        created_record._eadu_add_parent_mapping_to_payload(
+                            created_record, eadu_partner, payload, item_placeholders
+                        )
 
                         # ── Handle attachments ───────────────────────────────
                         att_any_ids = []
@@ -373,7 +388,7 @@ class MailMessage(models.Model):
         return recs
                     
 
-    def action_eadu_receive(self, model, res_id, body, partner_id, eadu_ident, attachment_ids=None, sync_version=None):
+    def action_eadu_receive(self, model, res_id, body, partner_id, eadu_ident, attachment_ids=None, sync_version=None, parent_id=None):
         eadu_contact = self.env.user.partner_id
         if not eadu_contact.eadu_url:
             raise
@@ -387,6 +402,8 @@ class MailMessage(models.Model):
             'res_id': res_id,
             'model': model,
         }
+        if parent_id:
+            vals['parent_id'] = parent_id
         #TODO: check that attachment_ids are legal...
         if attachment_ids:
             self.env['ir.attachment'].browse(attachment_ids).sudo().with_context(eadu_message=True).write({
@@ -488,6 +505,14 @@ class MailMessage(models.Model):
                     relay_placeholders['partner_id'] = partner_map.id
                 if has_queued_att:
                     relay_placeholders['attachment_ids'] = att_any_ids
+                parent_id = None
+                parent_map = EaduAny._search_for_eadu_partner(
+                    eadu_partner_upd, 'mail.message', message.parent_id.id
+                ) if message.parent_id else False
+                if parent_map:
+                    parent_id = parent_map.eadu_ident or None
+                    if not parent_map.eadu_ident:
+                        relay_placeholders['parent_id'] = parent_map.id
 
                 relay_any = EaduAny._send_or_queue(
                     eadu_partner_upd,
@@ -501,6 +526,7 @@ class MailMessage(models.Model):
                         'eadu_ident': message.id,
                         'attachment_ids': [] if has_queued_att else remote_att_ids,
                         'sync_version': sync_version,
+                        'parent_id': parent_id,
                     },
                     local_model='mail.message',
                     local_res_id=message.id,
