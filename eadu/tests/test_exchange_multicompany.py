@@ -53,6 +53,12 @@ from odoo.addons.eadu.exceptions import EaduConnectionError
 from odoo.addons.eadu.models import res_partner as res_partner_model
 
 
+TEST_IMAGE_1X1 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+)
+
+
 @tagged("post_install", "-at_install")
 class TestEaduExchangeMultiCompany(common.TransactionCase):
     def setUp(self):
@@ -340,6 +346,118 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             mirrored_reply_local.attachment_ids.mapped("name"),
             "Replicated attachment should keep original filename",
         )
+
+    def _create_synced_ab_channel_message(self, channel_name, body):
+        alice_contact_a, bob_contact_a = self._do_ab_exchange()
+
+        channel_a = self.env["discuss.channel"].with_user(self.user_a).create(
+            {
+                "name": channel_name,
+                "channel_type": "channel",
+                "channel_partner_ids": [
+                    (4, alice_contact_a.id),
+                    (4, bob_contact_a.id),
+                ],
+            }
+        )
+
+        message_a = channel_a.with_user(self.user_a).message_post(
+            body=body,
+            message_type="comment",
+        )
+        eadu_contact_b = self.partner_a._get_eadu_partner()
+        channel_map = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_b.id),
+            ("res_model", "=", "discuss.channel"),
+            ("res_id", "=", channel_a.id),
+        ], limit=1)
+        self.assertTrue(channel_map)
+        channel_b = self.env["discuss.channel"].sudo().browse(channel_map.eadu_ident)
+
+        message_b = self.env["mail.message"].sudo().search([
+            ("model", "=", "discuss.channel"),
+            ("res_id", "=", channel_b.id),
+            ("body", "ilike", body),
+        ], limit=1)
+        self.assertTrue(message_a)
+        self.assertTrue(message_b)
+        return eadu_contact_b, channel_a, message_a, message_b
+
+    def test_channel_message_edit_with_attachment_syncs_immediately(self):
+        """The same method used by message edit UI syncs body and attachments."""
+        eadu_contact_b, channel_a, message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Message Update Channel",
+            "Original synced body",
+        )
+        edited_body = "Edited synced body"
+        late_attachment = self.env["ir.attachment"].with_user(self.user_a).sudo().create({
+            "name": "late-attachment.txt",
+            "datas": base64.b64encode(b"late attachment payload"),
+            "mimetype": "text/plain",
+            "res_model": "mail.compose.message",
+        })
+
+        channel_a.with_user(self.user_a)._message_update_content(
+            message_a.with_user(self.user_a),
+            body=edited_body,
+            attachment_ids=[late_attachment.id],
+        )
+
+        message_b.invalidate_recordset(["body"])
+        self.assertIn(edited_body, message_b.body)
+        message_b.invalidate_recordset(["attachment_ids"])
+        self.assertIn("late-attachment.txt", message_b.attachment_ids.mapped("name"))
+        self.assertFalse(self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_b.id),
+            ("pending_calls", "!=", False),
+        ]))
+
+    def test_channel_message_edit_with_attachment_queues_and_retries(self):
+        """Editing a synced message queues through pending_calls when remote is blocked."""
+        eadu_contact_b, channel_a, message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Queued Message Update Channel",
+            "Original queued update body",
+        )
+        self._blocked_partners.add(eadu_contact_b.id)
+
+        queued_body = "Queued edited body"
+        queued_attachment = self.env["ir.attachment"].with_user(self.user_a).sudo().create({
+            "name": "queued-late-attachment.txt",
+            "datas": base64.b64encode(b"queued late attachment payload"),
+            "mimetype": "text/plain",
+            "res_model": "mail.compose.message",
+        })
+        channel_a.with_user(self.user_a)._message_update_content(
+            message_a.with_user(self.user_a),
+            body=queued_body,
+            attachment_ids=[queued_attachment.id],
+        )
+
+        message_b.invalidate_recordset(["body", "attachment_ids"])
+        self.assertNotIn(queued_body, message_b.body)
+        self.assertNotIn("queued-late-attachment.txt", message_b.attachment_ids.mapped("name"))
+        pending = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_b.id),
+            ("pending_calls", "!=", False),
+        ])
+        self.assertTrue(pending, "Message edit and attachment update should be queued")
+        queued_methods = [
+            call.get("method")
+            for record in pending
+            for call in (record.pending_calls or [])
+        ]
+        self.assertIn("action_eadu_update", queued_methods)
+
+        self._blocked_partners.discard(eadu_contact_b.id)
+        self.env["eadu.partner.any"].sudo()._retry_all_queued_calls()
+
+        message_b.invalidate_recordset(["body", "attachment_ids"])
+        self.assertIn(queued_body, message_b.body)
+        self.assertIn("queued-late-attachment.txt", message_b.attachment_ids.mapped("name"))
+        self.assertFalse(self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_b.id),
+            ("pending_calls", "!=", False),
+        ]))
 
     def test_exchange_token_flow_three_companies_discuss_triplication(self):
         """
@@ -761,7 +879,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         decoded = self.env["res.partner"]._decode_eadu_exchange_token(
             wizard_generate.generated_token
         )
-        self.assertEqual(decoded["partner_name"], self.partner_a.name)
+        self.assertEqual(decoded["partner_name"], self.company_a.partner_id.name)
 
         wizard_receive = self.env["eadu.exchange.wizard"].with_user(self.user_b).create({
             "mode": "receive",
@@ -774,7 +892,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
     def test_exchange_wizard_guesses_partner_from_token(self):
         """Generated codes include a partner name so receiving from the menu can prefill it."""
         local_partner_for_a = self.ResPartner.create({
-            "name": self.partner_a.name,
+            "name": self.company_a.partner_id.name,
             "company_type": "company",
             "company_id": self.company_b.id,
         })
@@ -786,6 +904,22 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         wizard._onchange_token()
         self.assertEqual(wizard.partner_id, local_partner_for_a)
         self.assertEqual(wizard.guessed_partner_id, local_partner_for_a)
+        self.assertFalse(wizard.create_partner)
+
+    def test_exchange_wizard_prefills_create_partner_from_token_name(self):
+        """When no local partner matches the token name, the receive wizard prepares one."""
+        token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        token_parts = base64.b64decode(token.encode()).decode().split("#", 5)
+        token_parts[5] = "Brand New Remote Company"
+        token = base64.b64encode("#".join(token_parts).encode()).decode()
+        wizard = self.env["eadu.exchange.wizard"].with_user(self.user_b).create({
+            "mode": "receive",
+            "token": token,
+        })
+        wizard._onchange_token()
+        self.assertFalse(wizard.partner_id)
+        self.assertTrue(wizard.create_partner)
+        self.assertEqual(wizard.partner_name, "Brand New Remote Company")
 
     def test_exchange_wizard_can_create_partner_before_generating(self):
         wizard = self.env["eadu.exchange.wizard"].with_user(self.user_a).create({
@@ -806,11 +940,43 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             "token": token,
         })
         wizard._onchange_token()
-        self.assertEqual(wizard.partner_name, self.partner_a.name)
+        self.assertEqual(wizard.partner_name, self.company_a.partner_id.name)
         wizard.action_receive()
         self.assertTrue(wizard.partner_id)
-        self.assertEqual(wizard.partner_id.name, self.partner_a.name)
+        self.assertEqual(wizard.partner_id.name, self.company_a.partner_id.name)
         self.assertTrue(wizard.partner_id._get_eadu_partner().eadu_url)
+
+    def test_exchange_rpc_fields_include_images_and_are_applied(self):
+        """The token stays small; rich partner fields sync in the RPC handshake."""
+        self.partner_a.name = "Partner Record For Remote B"
+        self.company_a.partner_id.website = "https://db-a.example.test"
+        self.company_a.partner_id.street = "Main Exchange Street 1"
+        self.company_a.partner_id.city = "Sync City"
+        self.company_a.partner_id.image_1920 = TEST_IMAGE_1X1
+        self.user_a.partner_id.image_1920 = TEST_IMAGE_1X1
+
+        token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
+        decoded = self.env["res.partner"]._decode_eadu_exchange_token(token)
+        self.assertNotIn("fields", decoded)
+        self.assertEqual(decoded["partner_name"], self.company_a.partner_id.name)
+        self.assertNotEqual(decoded["partner_name"], self.partner_a.name)
+        self.assertNotIn(TEST_IMAGE_1X1, base64.b64decode(token.encode()).decode())
+
+        partner_b_as_user_b = self.partner_b.with_user(self.user_b)
+        partner_b_as_user_b.eadu_exchanged = token
+        partner_b_as_user_b.button_process_eadu_exchanged()
+
+        alice_contact_b = self.ResPartner.search([
+            ("parent_id", "=", self.partner_b.id),
+            ("name", "=", self.user_a.name),
+            ("type", "=", "contact"),
+        ], limit=1)
+        self.assertTrue(self.partner_b.image_1920)
+        self.assertEqual(self.partner_b.website, self.company_a.partner_id.website)
+        self.assertEqual(self.partner_b.street, self.company_a.partner_id.street)
+        self.assertEqual(self.partner_b.city, self.company_a.partner_id.city)
+        self.assertTrue(alice_contact_b)
+        self.assertTrue(alice_contact_b.image_1920)
 
     def test_exchange_requires_settings_access(self):
         regular_user = self.ResUsers.create({

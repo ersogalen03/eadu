@@ -66,7 +66,7 @@ class EaduExchangeWizard(models.TransientModel):
         self.remote_user_name = token_data["user_name"]
         self.remote_partner_name = token_data.get("partner_name")
 
-        if self.create_partner:
+        if self.create_partner and not self.partner_id:
             self.partner_name = self._partner_name_from_token(token_data)
             return
 
@@ -74,7 +74,12 @@ class EaduExchangeWizard(models.TransientModel):
         self.guessed_partner_id = guessed_partner
         if guessed_partner and not self.partner_id:
             self.partner_id = guessed_partner
-        elif not guessed_partner and not self.partner_id and not self.partner_name:
+            self.create_partner = False
+            self.partner_name = False
+        elif not guessed_partner and not self.partner_id:
+            self.create_partner = True
+            self.partner_name = self._partner_name_from_token(token_data)
+        elif self.create_partner:
             self.partner_name = self._partner_name_from_token(token_data)
 
     @api.onchange("mode")

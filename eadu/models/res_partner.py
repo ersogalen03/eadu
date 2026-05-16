@@ -139,8 +139,12 @@ class ResPartner(models.Model):
         self.ensure_one()
         partner = self.commercial_partner_id
         partner_company_id = partner.company_id.id
-        child_partner = partner.child_ids.filtered(lambda p: p.name == name)
-        eadu_rec = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(self, 'res.partner', child_partner.id)
+        child_partner = partner.child_ids.filtered(lambda p: p.name == name)[:1]
+        eadu_rec = self.env['eadu.partner.any']
+        if child_partner:
+            eadu_rec = self.env['eadu.partner.any'].sudo()._search_for_eadu_partner(
+                self, 'res.partner', child_partner.id
+            )
         if eadu_rec:
             eadu_rec._get_record().name = name
         elif child_partner:
@@ -168,14 +172,19 @@ class ResPartner(models.Model):
         web_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
         dbname = self._get_db_name()
         cuser = self.env.user # To already create yourself in the other db (if you have not been already)
+        exchange_partner = self._eadu_exchange_company_partner(cuser)
         return base64.b64encode('#'.join([
             web_url,
             api_key,
             dbname,
             cuser.name,
             str(cuser.partner_id.id),
-            self.commercial_partner_id.name,
+            exchange_partner.name,
         ]).encode()).decode()
+
+    def _eadu_exchange_company_partner(self, user=None):
+        user = user or self.env.user
+        return user.company_id.partner_id or user.partner_id.commercial_partner_id
 
     @api.model
     def _decode_eadu_exchange_token(self, token):
@@ -240,10 +249,31 @@ class ResPartner(models.Model):
             'cpartnereadu': cuser.partner_id.id,
             'ypartnereadu': connecting_contact.id, # newly created partner in this db
             'ypartnerid': remote_partner_id, # for the contacted db to verify who started it originally
+            'ycompanyeadu': self.commercial_partner_id.id,
         })
         ypartnerid = res['result']
         if ypartnerid:
             self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(self, 'res.users', cuser.id, ypartnerid)
+            user_partner_any = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                eadu_contact, 'res.partner', cuser.partner_id.id, ypartnerid
+            )
+            cuser.partner_id._eadu_send_update(user_partner_any)
+        if res.get('company_result'):
+            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                eadu_contact, 'res.partner', self.commercial_partner_id.id,
+                res['company_result'], partner_master=True,
+            )
+        response_fields = res.get('fields') or {}
+        partner_fields = self._eadu_merge_field_values(
+            response_fields.get('partner'),
+            response_fields.get('company_partner'),
+        )
+        partner_vals = self._eadu_update_values_from_fields(partner_fields)
+        if partner_vals:
+            self.with_context(eadu_message=True).write(partner_vals)
+        user_partner_vals = self._eadu_update_values_from_fields(response_fields.get('user_partner'))
+        if user_partner_vals:
+            connecting_contact.with_context(eadu_message=True).write(user_partner_vals)
 
     def action_open_eadu_exchange_wizard(self):
         self.ensure_one()
@@ -274,7 +304,10 @@ class ResPartner(models.Model):
         self.ensure_one()
         self._process_eadu_exchange_token(self.eadu_exchanged)
 
-    def action_connect_eadu(self, apikey, url, db, cusername, cpartnereadu, ypartnereadu, ypartnerid):
+    def action_connect_eadu(
+        self, apikey, url, db, cusername, cpartnereadu, ypartnereadu, ypartnerid,
+        ycompanyeadu=None, fields=None, company_fields=None, user_partner_fields=None,
+    ):
         user = self.env.user
         eadu_contact = user.partner_id
         if not user.has_group('eadu.group_portal_eadu'): # + we could check that they correspond
@@ -288,12 +321,82 @@ class ResPartner(models.Model):
         })
         # We already sync the users that did the exchange, so they 
         # can already talk to each other
+        fields = fields or {}
         ypartnerreturn = eadu_contact.sudo()._create_child_contact(cusername, int(cpartnereadu))
+        user_partner_vals = self._eadu_update_values_from_fields(
+            fields.get('user_partner') or user_partner_fields
+        )
+        if user_partner_vals:
+            ypartnerreturn.with_context(eadu_message=True).write(user_partner_vals)
         ypartner = self.env['res.partner'].sudo().browse(int(ypartnerid))
         self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'res.partner', ypartner.id, ypartnereadu)
-        return {'result': ypartnerreturn.id}
+        if ycompanyeadu:
+            self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+                eadu_contact, 'res.partner', eadu_contact.commercial_partner_id.id,
+                int(ycompanyeadu),
+            )
+        company_partner = self._eadu_exchange_company_partner(user)
+        company_partner_fields = company_partner._eadu_prepare_update_fields() if company_partner else {}
+        return {
+            'result': ypartnerreturn.id,
+            'company_result': company_partner.id,
+            'fields': {
+                'partner': company_partner_fields,
+                'company_partner': company_partner_fields,
+                'user_partner': ypartner._eadu_prepare_update_fields(),
+            },
+        }
 
-    def action_eadu_create_contact(self, eadu_ident, name, email, eadu_url=None, eadu_url_ident=None):
+    def _eadu_merge_field_values(self, *fields_values):
+        """Merge field payloads, using later payloads only for empty values."""
+        vals = {}
+        for payload in fields_values:
+            for field_name, value in (payload or {}).items():
+                if field_name not in vals or not vals[field_name]:
+                    vals[field_name] = value
+        return vals
+
+    def _eadu_update_values_from_fields(self, fields_values):
+        if not fields_values:
+            return {}
+        allowed_fields = set(self._eadu_update_field_names())
+        vals = {}
+        for field_name, value in fields_values.items():
+            if field_name in allowed_fields and field_name in self._fields:
+                vals[field_name] = value
+        return vals
+
+    def _eadu_update_field_names(self):
+        return [
+            'name', 'email', 'phone', 'mobile', 'function', 'street',
+            'street2', 'zip', 'city', 'state_id', 'country_id',
+            'company_type', 'is_company', 'type', 'website', 'vat',
+            'company_registry', 'title', 'lang', 'tz', 'image_1920',
+        ]
+
+    def _eadu_prepare_update_fields(self, field_names=None):
+        allowed_fields = self._eadu_update_field_names()
+        if field_names is not None:
+            field_names = set(field_names)
+            allowed_fields = [field for field in allowed_fields if field in field_names]
+        return self.env['eadu.partner.any'].sudo()._serialize_fields(self, allowed_fields)
+
+    def _eadu_send_update(self, eadu_any, field_names=None):
+        self.ensure_one()
+        vals = self._eadu_prepare_update_fields(field_names)
+        if vals:
+            self.env['eadu.partner.any'].sudo()._send_or_queue(
+                eadu_any.partner_id,
+                'res.partner',
+                'action_eadu_update',
+                {
+                    'eadu_ident': eadu_any.res_id,
+                    'fields': vals,
+                },
+                eadu_any_ref=eadu_any,
+            )
+
+    def action_eadu_create_contact(self, eadu_ident, name, email, eadu_url=None, eadu_url_ident=None, fields=None):
         eadu_contact = self.env.user.partner_id
         if not eadu_contact.eadu_url:
             raise
@@ -313,12 +416,31 @@ class ResPartner(models.Model):
                 if epa:
                     #epa._get_record().email = email
                     epa._search_create_for_eadu_partner(eadu_contact, 'res.partner', epa.res_id, eadu_ident, partner_master=True)
+                    vals = self._eadu_update_values_from_fields(fields)
+                    if vals:
+                        epa._get_record().sudo().with_context(eadu_message=True).write(vals)
                     return {'result': epa.res_id}
 
                 
         partner = eadu_contact._create_child_contact(name, eadu_ident)
-        partner.email = email
+        vals = self._eadu_update_values_from_fields(fields)
+        vals.setdefault('email', email)
+        partner.sudo().with_context(eadu_message=True).write(vals)
         return {'result': partner.id}
+
+    def action_eadu_update(self, eadu_ident, fields):
+        eadu_contact = self.env.user.partner_id
+        if not eadu_contact.eadu_url:
+            raise
+        eadu_any = self.env['eadu.partner.any'].sudo()._search_for_eadu_ident(
+            eadu_contact, 'res.partner', eadu_ident
+        )
+        if not eadu_any:
+            return {'result': False}
+        vals = self._eadu_update_values_from_fields(fields)
+        if vals:
+            eadu_any._get_record().sudo().with_context(eadu_message=True).write(vals)
+        return {'result': True}
 
     def _eadu_call(self, model, method, params):
         """Make a synchronous JSON RPC call to the remote eadu instance.
@@ -389,6 +511,7 @@ class ResPartner(models.Model):
             'name': self.name,
             'email': self.email,
             'eadu_ident': self.id,
+            'fields': self._eadu_prepare_update_fields(),
         }
         # If this partner belongs to another EADU instance, pass the cross-reference
         # so the remote can deduplicate.
@@ -412,8 +535,18 @@ class ResPartner(models.Model):
             partner_master=False,
         )
 
-    # def write(self, vals):
-    #     res = super().write(vals)
-    #     for partner in self:
-    #         self.env['eadu.partner.any'].sudo()._sync_with_others('res.partner', partner.id, vals)
-    #     return res
+    def write(self, vals):
+        res = super().write(vals)
+        if not self.env.context.get('eadu_message'):
+            changed_fields = set(vals) & set(self._eadu_update_field_names())
+            if not changed_fields:
+                return res
+            EaduAny = self.env['eadu.partner.any'].sudo()
+            for partner in self:
+                eadu_anys = EaduAny.search([
+                    ('res_model', '=', 'res.partner'),
+                    ('res_id', '=', partner.id),
+                ])
+                for eadu_any in eadu_anys:
+                    partner._eadu_send_update(eadu_any, changed_fields)
+        return res

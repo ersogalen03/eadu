@@ -87,6 +87,44 @@ class ProductProduct(models.Model):
             return list_price
         return standard_price or 0.0
 
+    def _eadu_update_values_from_fields(self, fields_values):
+        if not fields_values:
+            return {}
+        allowed_fields = set(self._eadu_update_field_names())
+        vals = {}
+        for field_name, value in fields_values.items():
+            if field_name in allowed_fields and field_name in self._fields:
+                vals[field_name] = value
+        return vals
+
+    def _eadu_update_field_names(self):
+        return [
+            'name', 'barcode', 'default_code', 'list_price', 'lst_price',
+            'image_1920', 'image_variant_1920',
+        ]
+
+    def _eadu_prepare_update_fields(self, field_names=None):
+        allowed_fields = self._eadu_update_field_names()
+        if field_names is not None:
+            field_names = set(field_names)
+            allowed_fields = [field for field in allowed_fields if field in field_names]
+        return self.env['eadu.partner.any'].sudo()._serialize_fields(self, allowed_fields)
+
+    def _eadu_send_update(self, eadu_any, field_names=None):
+        self.ensure_one()
+        vals = self._eadu_prepare_update_fields(field_names)
+        if vals:
+            self.env['eadu.partner.any'].sudo()._send_or_queue(
+                eadu_any.partner_id,
+                'product.product',
+                'action_eadu_update',
+                {
+                    'eadu_ident': eadu_any.res_id,
+                    'fields': vals,
+                },
+                eadu_any_ref=eadu_any,
+            )
+
     def _eadu_prepare_product_review(self, barcode=None, attributes=None):
         reasons = []
         barcode_matches = self._eadu_find_barcode_match(barcode)
@@ -190,7 +228,7 @@ class ProductProduct(models.Model):
     def action_eadu_import_product(
         self, eadu_ident, name, barcode=None, default_code=None,
         standard_price=0.0, sale_price=None, list_price=None, currency_id=None,
-        min_qty=0.0, tiered_prices=None, attributes=None,
+        min_qty=0.0, tiered_prices=None, attributes=None, fields=None,
     ):
         """Import a remote product directly as/mapped to native product.product."""
         self._eadu_check_portal()
@@ -208,7 +246,7 @@ class ProductProduct(models.Model):
             barcode_matches = self._eadu_find_barcode_match(barcode)
             if barcode and len(barcode_matches) == 1 and not attributes:
                 product = barcode_matches
-                product.sudo().write({
+                product.sudo().with_context(eadu_message=True).write({
                     'eadu_catalog': True,
                     'eadu_merge_state': 'auto_linked',
                     'eadu_review_reason': False,
@@ -229,6 +267,10 @@ class ProductProduct(models.Model):
                 )
             self._eadu_notify_remote_product_link(eadu_contact, eadu_ident, product)
 
+        vals = self._eadu_update_values_from_fields(fields)
+        if vals:
+            product.sudo().with_context(eadu_message=True).write(vals)
+
         self._eadu_upsert_supplierinfo(
             product,
             eadu_contact,
@@ -240,6 +282,19 @@ class ProductProduct(models.Model):
             tiered_prices=tiered_prices,
         )
         return {'result': product.id}
+
+    def action_eadu_update(self, eadu_ident, fields):
+        self._eadu_check_portal()
+        eadu_contact = self.env.user.partner_id
+        eadu_any = self.env['eadu.partner.any'].sudo()._search_for_eadu_ident(
+            eadu_contact, 'product.product', eadu_ident
+        )
+        if not eadu_any:
+            return {'result': False}
+        vals = self._eadu_update_values_from_fields(fields)
+        if vals:
+            eadu_any._get_record().sudo().with_context(eadu_message=True).write(vals)
+        return {'result': True}
 
     def action_eadu_create_product_link(self, eadu_ident, partner_product_id):
         """Remote callback: map one of our products to the partner's local product."""
@@ -270,3 +325,19 @@ class ProductProduct(models.Model):
                 'active_test': False,
             },
         }
+
+    def write(self, vals):
+        res = super().write(vals)
+        if not self.env.context.get('eadu_message'):
+            changed_fields = set(vals) & set(self._eadu_update_field_names())
+            if not changed_fields:
+                return res
+            EaduAny = self.env['eadu.partner.any'].sudo()
+            for product in self:
+                eadu_anys = EaduAny.search([
+                    ('res_model', '=', 'product.product'),
+                    ('res_id', '=', product.id),
+                ])
+                for eadu_any in eadu_anys:
+                    product._eadu_send_update(eadu_any, changed_fields)
+        return res

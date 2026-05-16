@@ -23,7 +23,6 @@ class EaduPartnerAny(models.Model):
     res_model = fields.Char('Resource Model', index=True)
     res_id = fields.Integer('Resource ID', index=True)
     eadu_ident = fields.Integer('Eadu Identification')
-    to_sync = fields.Boolean('To Sync')
     master_status = fields.Selection(
         [('partner', 'Partner Is Master'), ('me', 'I Am Master')],
         string='Master Status',
@@ -59,6 +58,13 @@ class EaduPartnerAny(models.Model):
             ('res_model', '=', res_model),
             ('res_id', '=', res_id),
         ])
+
+    def _search_for_eadu_ident(self, eadu_partner, res_model, eadu_ident):
+        return self.search([
+            ('partner_id', '=', eadu_partner.id),
+            ('res_model', '=', res_model),
+            ('eadu_ident', '=', eadu_ident),
+        ], limit=1)
 
     def _search_create_for_eadu_partner(self, eadu_partner, res_model, res_id, eadu_ident, partner_master=False):
         record = self._search_for_eadu_partner(eadu_partner, res_model, res_id)
@@ -302,61 +308,20 @@ class EaduPartnerAny(models.Model):
         for eadu_partner in blocked_partners:
             self._retry_queued_calls(eadu_partner)
 
-    def _model_fields_mapping(self):
-        return {
-            'res.partner': ['name', 'email', 'phone', 'function', 'street', 'street2', 'zip', 'city', 'state_id', 'country_id', 'company_id'],
-            # Include attachment_ids so attachment writes mark record for sync
-            'mail.message': ['body', 'attachment_ids'],
-            'ir.attachment': ['name', 'mimetype', 'datas', 'res_model', 'res_id'],
-            'mail.message.reaction': ['content'],
-        }
-                
-    def _sync_with_others(self, res_model, res_id, vals):
-        eadu_anys = self.search([('res_model', '=', res_model), ('res_id', '=', res_id)]) 
-        if eadu_anys and vals.keys() & set(self._model_fields_mapping().get(res_model, [])):
-            eadu_anys.to_sync = True    
-        # Trigger cron
-        self.env.ref('eadu.ir_cron_process_eadu_synchronize').sudo()._trigger()
-         
+    def _serialize_field_value(self, record, field_name):
+        value = record[field_name]
+        field = record._fields[field_name]
+        if field.type == 'many2one':
+            return value.id if value else False
+        if field.type in ('many2many', 'one2many'):
+            return value.ids
+        if field.type == 'binary':
+            return value.decode() if isinstance(value, bytes) else value
+        return value
 
-    def _synchronize(self):
-        """Called by the cron to push pending field changes to remote instances."""
-        to_sync = self.search([('to_sync', '=', True)])
-        for eadu_any in to_sync:
-            # Skip records that have never been successfully sent to the remote.
-            if not eadu_any.eadu_ident:
-                eadu_any.to_sync = False
-                continue
-
-            record = eadu_any._get_record()
-            if not record:
-                continue
-            vals = {}
-            for field in self._model_fields_mapping().get(eadu_any.res_model, []):
-                vals[field] = record[field]
-                if self.env[eadu_any.res_model]._fields[field].type == 'many2one':
-                    vals[field] = vals[field].id if vals[field] else False
-                if field == "datas":
-                    vals[field] = vals[field].decode() if isinstance(vals[field], bytes) else vals[field]
-
-            self._send_or_queue(
-                eadu_any.partner_id,
-                'eadu.partner.any',
-                'remote_sync',
-                {
-                    'res_model': eadu_any.res_model,
-                    'res_id': eadu_any.eadu_ident,
-                    'vals': vals,
-                },
-                eadu_any_ref=eadu_any,
-            )
-            eadu_any.to_sync = False
-        
-    def remote_sync(self, res_model, res_id, vals):
-        """ Called from remote to update the record """
-        eadu_contact = self.env.user.partner_id
-        eadu_any = self._search_for_eadu_partner(eadu_contact, res_model, res_id)
-        if eadu_any:
-            record = eadu_any._get_record()
-            if record:
-                record.sudo().with_context(eadu_message=True).write(vals) # need to think security here
+    def _serialize_fields(self, record, fields_to_sync):
+        vals = {}
+        for field_name in fields_to_sync:
+            if field_name in record._fields:
+                vals[field_name] = self._serialize_field_value(record, field_name)
+        return vals

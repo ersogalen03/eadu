@@ -85,7 +85,6 @@
                 <field name="res_id"/>
                 <field name="eadu_ident"/>
                 <field name="master_status"/>
-                <field name="to_sync"/>
             </list>
         </field>
     </record>
@@ -102,7 +101,6 @@
                         <field name="res_id"/>
                         <field name="eadu_ident"/>
                         <field name="master_status"/>
-                        <field name="to_sync"/>
                     </group>
                 </sheet>
             </form>

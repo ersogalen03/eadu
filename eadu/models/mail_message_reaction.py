@@ -6,6 +6,31 @@ from odoo import api, models
 class MailMessageReaction(models.Model):
     _inherit = 'mail.message.reaction'
 
+    def _eadu_update_field_names(self):
+        return ['content']
+
+    def _eadu_prepare_update_fields(self, field_names=None):
+        allowed_fields = self._eadu_update_field_names()
+        if field_names is not None:
+            field_names = set(field_names)
+            allowed_fields = [field for field in allowed_fields if field in field_names]
+        return self.env['eadu.partner.any'].sudo()._serialize_fields(self, allowed_fields)
+
+    def _eadu_send_update(self, eadu_any, field_names=None):
+        self.ensure_one()
+        vals = self._eadu_prepare_update_fields(field_names)
+        if vals:
+            self.env['eadu.partner.any'].sudo()._send_or_queue(
+                eadu_any.partner_id,
+                'mail.message.reaction',
+                'action_eadu_update',
+                {
+                    'eadu_ident': eadu_any.res_id,
+                    'fields': vals,
+                },
+                eadu_any_ref=eadu_any,
+            )
+
     @api.model_create_multi
     def create(self, vals_list):
         if self.env.context.get('eadu_reaction'):
@@ -77,6 +102,22 @@ class MailMessageReaction(models.Model):
                 )
         return super().unlink()
 
+    def write(self, vals):
+        res = super().write(vals)
+        if not self.env.context.get('eadu_reaction'):
+            changed_fields = set(vals) & set(self._eadu_update_field_names())
+            if not changed_fields:
+                return res
+            EaduAny = self.env['eadu.partner.any'].sudo()
+            for reaction in self:
+                eadu_anys = EaduAny.search([
+                    ('res_model', '=', 'mail.message.reaction'),
+                    ('res_id', '=', reaction.id),
+                ])
+                for eadu_any in eadu_anys:
+                    reaction._eadu_send_update(eadu_any, changed_fields)
+        return res
+
     # Remote entry points
     def action_eadu_receive(self, message_id, content, partner_id, eadu_ident):
         eadu_contact = self.env.user.partner_id
@@ -113,3 +154,17 @@ class MailMessageReaction(models.Model):
         if eadu_any:
             self.env['mail.message.reaction'].browse(eadu_any.res_id).unlink()
             eadu_any.sudo().unlink()
+
+    def action_eadu_update(self, eadu_ident, fields):
+        eadu_contact = self.env.user.partner_id
+        eadu_any = self.env['eadu.partner.any'].sudo()._search_for_eadu_ident(
+            eadu_contact, 'mail.message.reaction', eadu_ident
+        )
+        if not eadu_any:
+            return {'result': False}
+        vals = {}
+        if fields and 'content' in fields:
+            vals['content'] = fields['content']
+        if vals:
+            eadu_any._get_record().sudo().with_context(eadu_reaction=True).write(vals)
+        return {'result': True}
