@@ -42,10 +42,12 @@
             <field name="country_id" ref="base.nl"/>
             <field name="email">lensworks@deathstar.example</field>
         </record>
+    </data>
 
+    <data noupdate="1">
         <record id="attr_component_class" model="product.attribute">
             <field name="name">Component Class</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="class_panel" model="product.attribute.value">
             <field name="name">Command Panel</field>
@@ -62,7 +64,7 @@
 
         <record id="attr_material_grade" model="product.attribute">
             <field name="name">Material Grade</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="grade_durasteel" model="product.attribute.value">
             <field name="name">Black Durasteel</field>
@@ -79,7 +81,7 @@
 
         <record id="attr_clearance" model="product.attribute">
             <field name="name">Clearance Level</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="clearance_gray" model="product.attribute.value">
             <field name="name">Gray Routine</field>
@@ -96,7 +98,7 @@
 
         <record id="attr_lens_focus" model="product.attribute">
             <field name="name">Lens Focus</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="focus_narrow" model="product.attribute.value">
             <field name="name">Narrow Alignment</field>

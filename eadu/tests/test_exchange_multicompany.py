@@ -428,6 +428,17 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         )
         return [row[0] for row in self.env.cr.fetchall()]
 
+    def _message_pinned_at_from_db(self, message):
+        self.env.flush_all()
+        self.env.cr.execute(
+            "SELECT pinned_at FROM mail_message WHERE id = %s",
+            [message.id],
+        )
+        return self.env.cr.fetchone()[0]
+
+    def _binary_to_string(self, value):
+        return value.decode() if isinstance(value, bytes) else value
+
     def _pending_mail_message_update_calls_for_partner(self, eadu_contact):
         return [
             call
@@ -530,6 +541,109 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertTrue(reply_b.exists())
         self.assertEqual(reply_b.parent_id.id, message_b.id)
         self.assertIn("Subthread reply from A", self._message_body_from_db(reply_b))
+
+    def test_channel_message_pin_and_unpin_syncs(self):
+        """Pinning a synced Discuss message mirrors pinned_at in both directions."""
+        _eadu_contact_b, _channel_a, message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Pin Sync Channel",
+            "Message to pin across EADU",
+        )
+        channel_a = self.env["discuss.channel"].sudo().browse(message_a.res_id)
+        channel_b = self.env["discuss.channel"].sudo().browse(message_b.res_id)
+        remote_user = channel_b.channel_partner_ids.user_ids.filtered(
+            lambda u: u.company_id == self.company_b
+        )[:1]
+        self.assertTrue(remote_user)
+
+        channel_a.with_user(self.user_a).set_message_pin(message_a.id, True)
+        self.assertTrue(self._message_pinned_at_from_db(message_a))
+        self.assertTrue(self._message_pinned_at_from_db(message_b))
+
+        channel_b.with_user(remote_user).set_message_pin(message_b.id, False)
+        self.assertFalse(self._message_pinned_at_from_db(message_b))
+        self.assertFalse(self._message_pinned_at_from_db(message_a))
+
+    def test_channel_avatar_update_syncs(self):
+        """Updating a synced Discuss channel image mirrors the remote avatar source."""
+        _eadu_contact_b, channel_a, _message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Avatar Sync Channel",
+            "Message to create channel before avatar update",
+        )
+        channel_b = self.env["discuss.channel"].sudo().browse(message_b.res_id)
+
+        channel_a.with_user(self.user_a).write({"image_128": TEST_IMAGE_1X1})
+        self.assertEqual(
+            self._binary_to_string(channel_b.sudo().image_128),
+            TEST_IMAGE_1X1,
+        )
+
+        remote_user = channel_b.channel_partner_ids.user_ids.filtered(
+            lambda u: u.company_id == self.company_b
+        )[:1]
+        self.assertTrue(remote_user)
+        channel_b.with_user(remote_user).write({"image_128": False})
+        self.assertFalse(channel_a.sudo().image_128)
+
+    def test_discuss_subthread_channel_syncs_parent_channel_and_messages(self):
+        """A nested Discuss subthread channel is mirrored under the remote parent channel."""
+        _eadu_contact_b, channel_a, _message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Nested Discuss Channel",
+            "Parent message for nested Discuss thread",
+        )
+
+        channel_b = self.env["discuss.channel"].sudo().browse(message_b.res_id)
+        remote_user = channel_b.channel_partner_ids.user_ids.filtered(
+            lambda u: u.company_id == self.company_b
+        )[:1]
+        self.assertTrue(remote_user)
+
+        sidebar_subchannel_b = channel_b.with_user(remote_user)._create_sub_channel(
+            name="Sidebar visible thread",
+        )
+        subchannel_b = channel_b.with_user(remote_user)._create_sub_channel(
+            from_message_id=message_b.id,
+            name="Nested sync thread",
+        )
+        eadu_contact_a = self.partner_b._get_eadu_partner()
+        sidebar_subchannel_map = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_a.id),
+            ("res_model", "=", "discuss.channel"),
+            ("res_id", "=", sidebar_subchannel_b.id),
+        ], limit=1)
+        self.assertTrue(sidebar_subchannel_map)
+        sidebar_subchannel_a = self.env["discuss.channel"].sudo().browse(
+            sidebar_subchannel_map.eadu_ident
+        )
+        self.assertTrue(sidebar_subchannel_a.exists())
+        self.assertEqual(sidebar_subchannel_a.parent_channel_id.id, channel_a.id)
+        self.assertIn(self.user_a.partner_id, sidebar_subchannel_a.channel_partner_ids)
+
+        subchannel_map = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_a.id),
+            ("res_model", "=", "discuss.channel"),
+            ("res_id", "=", subchannel_b.id),
+        ], limit=1)
+        self.assertTrue(subchannel_map)
+        subchannel_a = self.env["discuss.channel"].sudo().browse(subchannel_map.eadu_ident)
+        self.assertTrue(subchannel_a.exists())
+        self.assertEqual(subchannel_a.parent_channel_id.id, channel_a.id)
+
+        thread_message_body = "Message inside nested thread from B"
+        thread_message_b = subchannel_b.with_user(remote_user).message_post(
+            body=thread_message_body,
+            message_type="comment",
+        )
+
+        thread_message_map = self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "=", eadu_contact_a.id),
+            ("res_model", "=", "mail.message"),
+            ("res_id", "=", thread_message_b.id),
+        ], limit=1)
+        self.assertTrue(thread_message_map)
+        thread_message_a = self.env["mail.message"].sudo().browse(thread_message_map.eadu_ident)
+        self.assertTrue(thread_message_a.exists())
+        self.assertEqual(thread_message_a.res_id, subchannel_a.id)
+        self.assertIn(thread_message_body, self._message_body_from_db(thread_message_a))
 
     def test_attachment_on_synced_non_message_record_syncs_related_model(self):
         """Attachments follow any already-synced target record, not only mail.message."""

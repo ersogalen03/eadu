@@ -42,10 +42,12 @@
             <field name="country_id" ref="base.is"/>
             <field name="email">containment@eadu.example</field>
         </record>
+    </data>
 
+    <data noupdate="1">
         <record id="attr_kyber_type" model="product.attribute">
             <field name="name">Kyber Type</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="kyber_clear" model="product.attribute.value">
             <field name="name">Clear Lattice</field>
@@ -62,7 +64,7 @@
 
         <record id="attr_refinement" model="product.attribute">
             <field name="name">Refinement Grade</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="grade_raw" model="product.attribute.value">
             <field name="name">Raw Washed</field>
@@ -79,7 +81,7 @@
 
         <record id="attr_containment" model="product.attribute">
             <field name="name">Containment Class</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="containment_glass" model="product.attribute.value">
             <field name="name">Glass Ampoule</field>
@@ -96,7 +98,7 @@
 
         <record id="attr_resonance" model="product.attribute">
             <field name="name">Resonance Band</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="res_low" model="product.attribute.value">
             <field name="name">Low Hum</field>

@@ -4,7 +4,7 @@ from datetime import datetime
 import re
 
 from markupsafe import Markup
-from odoo import api, models
+from odoo import api, fields, models
 from odoo.exceptions import AccessError
 
 class MailMessage(models.Model):
@@ -119,7 +119,7 @@ class MailMessage(models.Model):
             ident_placeholders['parent_id'] = parent_map.id
 
     def _eadu_update_field_names(self):
-        return ['body', 'attachment_ids']
+        return ['body', 'attachment_ids', 'pinned_at']
 
     def _eadu_sync_origin(self):
         db_name = self.env['res.partner']._get_db_name()
@@ -172,6 +172,10 @@ class MailMessage(models.Model):
         if 'body' in field_names:
             fields_values['body'] = self._rewrite_oe_links(
                 EaduAny._serialize_field_value(self, 'body'), eadu_any.partner_id
+            )
+        if 'pinned_at' in field_names:
+            fields_values['pinned_at'] = (
+                fields.Datetime.to_string(self.pinned_at) if self.pinned_at else False
             )
 
         params = {
@@ -571,6 +575,8 @@ class MailMessage(models.Model):
         vals = {}
         if 'body' in fields:
             vals['body'] = Markup(fields['body'])
+        if 'pinned_at' in fields:
+            vals['pinned_at'] = fields['pinned_at'] or False
         if attachment_ids is not None:
             if attachment_ids:
                 self.env['ir.attachment'].browse(attachment_ids).sudo().with_context(eadu_message=True).write({

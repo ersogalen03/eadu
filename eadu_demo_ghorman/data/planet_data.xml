@@ -42,10 +42,12 @@
             <field name="country_id" ref="base.be"/>
             <field name="email">dyes@ghorman.example</field>
         </record>
+    </data>
 
+    <data noupdate="1">
         <record id="attr_fiber" model="product.attribute">
             <field name="name">Ghorman Fiber</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="fiber_cloud_silk" model="product.attribute.value">
             <field name="name">Cloud Silk</field>
@@ -62,7 +64,7 @@
 
         <record id="attr_weave" model="product.attribute">
             <field name="name">Weave Pattern</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="weave_plain" model="product.attribute.value">
             <field name="name">Plain Diplomatic</field>
@@ -79,7 +81,7 @@
 
         <record id="attr_dye" model="product.attribute">
             <field name="name">Dye Bath</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="dye_ochre" model="product.attribute.value">
             <field name="name">Old Republic Ochre</field>
@@ -96,7 +98,7 @@
 
         <record id="attr_yarn_twist" model="product.attribute">
             <field name="name">Yarn Twist</field>
-            <field name="create_variant">always</field>
+            <field name="create_variant">dynamic</field>
         </record>
         <record id="twist_s" model="product.attribute.value">
             <field name="name">S-Twist Fine</field>
