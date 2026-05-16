@@ -47,6 +47,10 @@ class EaduPartnerAny(models.Model):
         'Pending Calls',
         help="Queue of outgoing RPC calls waiting to be sent to the remote partner.",
     )
+    sync_version = fields.Json(
+        'Sync Version',
+        help="Last accepted logical version for conflict detection.",
+    )
 
     def _get_record(self):
         self.ensure_one()

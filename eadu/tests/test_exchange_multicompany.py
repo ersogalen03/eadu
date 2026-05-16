@@ -44,6 +44,7 @@ Test scenarios
 """
 
 import base64
+from copy import deepcopy
 from unittest.mock import patch
 
 from odoo.exceptions import AccessError
@@ -111,6 +112,7 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         )
 
         self._blocked_partners = set()  # set of eadu_contact.id → raises EaduConnectionError
+        self._eadu_call_log = []
         self._eadu_call_patcher = patch.object(
             res_partner_model.ResPartner,
             "_eadu_call",
@@ -146,6 +148,12 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         """Like _local_cross_company_call but raises EaduConnectionError for blocked partners."""
         if eadu_contact.id in self._blocked_partners:
             raise EaduConnectionError("mocked connection failure")
+        self._eadu_call_log.append({
+            "partner": eadu_contact,
+            "model": model,
+            "method": method,
+            "params": deepcopy(params),
+        })
         return self._local_cross_company_call(eadu_contact, model, method, params)
 
     # ── Fixture helpers ───────────────────────────────────────────────────────
@@ -383,6 +391,51 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertTrue(message_b)
         return eadu_contact_b, channel_a, message_a, message_b
 
+    def _pending_for_partners(self, *eadu_contacts):
+        return self.env["eadu.partner.any"].sudo().search([
+            ("partner_id", "in", [p.id for p in eadu_contacts]),
+            ("pending_calls", "!=", False),
+        ])
+
+    def _retry_until_no_pending_for_partners(self, *eadu_contacts):
+        EaduAny = self.env["eadu.partner.any"].sudo()
+        for _attempt in range(5):
+            if not self._pending_for_partners(*eadu_contacts):
+                return
+            EaduAny._retry_all_queued_calls()
+        self.assertFalse(self._pending_for_partners(*eadu_contacts))
+
+    def _message_body_from_db(self, message):
+        self.env.flush_all()
+        self.env.cr.execute(
+            "SELECT body FROM mail_message WHERE id = %s",
+            [message.id],
+        )
+        return self.env.cr.fetchone()[0] or ""
+
+    def _message_attachment_names_from_db(self, message):
+        self.env.flush_all()
+        self.env.cr.execute(
+            """
+            SELECT ir_attachment.name
+              FROM ir_attachment
+              JOIN message_attachment_rel
+                ON message_attachment_rel.attachment_id = ir_attachment.id
+             WHERE message_attachment_rel.message_id = %s
+             ORDER BY ir_attachment.name
+            """,
+            [message.id],
+        )
+        return [row[0] for row in self.env.cr.fetchall()]
+
+    def _pending_mail_message_update_calls_for_partner(self, eadu_contact):
+        return [
+            call
+            for record in self._pending_for_partners(eadu_contact)
+            for call in (record.pending_calls or [])
+            if call.get("model") == "mail.message" and call.get("method") == "action_eadu_update"
+        ]
+
     def test_channel_message_edit_with_attachment_syncs_immediately(self):
         """The same method used by message edit UI syncs body and attachments."""
         eadu_contact_b, channel_a, message_a, message_b = self._create_synced_ab_channel_message(
@@ -403,10 +456,8 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             attachment_ids=[late_attachment.id],
         )
 
-        message_b.invalidate_recordset(["body"])
-        self.assertIn(edited_body, message_b.body)
-        message_b.invalidate_recordset(["attachment_ids"])
-        self.assertIn("late-attachment.txt", message_b.attachment_ids.mapped("name"))
+        self.assertIn(edited_body, self._message_body_from_db(message_b))
+        self.assertIn("late-attachment.txt", self._message_attachment_names_from_db(message_b))
         self.assertFalse(self.env["eadu.partner.any"].sudo().search([
             ("partner_id", "=", eadu_contact_b.id),
             ("pending_calls", "!=", False),
@@ -433,9 +484,8 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
             attachment_ids=[queued_attachment.id],
         )
 
-        message_b.invalidate_recordset(["body", "attachment_ids"])
-        self.assertNotIn(queued_body, message_b.body)
-        self.assertNotIn("queued-late-attachment.txt", message_b.attachment_ids.mapped("name"))
+        self.assertNotIn(queued_body, self._message_body_from_db(message_b))
+        self.assertNotIn("queued-late-attachment.txt", self._message_attachment_names_from_db(message_b))
         pending = self.env["eadu.partner.any"].sudo().search([
             ("partner_id", "=", eadu_contact_b.id),
             ("pending_calls", "!=", False),
@@ -451,13 +501,156 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self._blocked_partners.discard(eadu_contact_b.id)
         self.env["eadu.partner.any"].sudo()._retry_all_queued_calls()
 
-        message_b.invalidate_recordset(["body", "attachment_ids"])
-        self.assertIn(queued_body, message_b.body)
-        self.assertIn("queued-late-attachment.txt", message_b.attachment_ids.mapped("name"))
+        self.assertIn(queued_body, self._message_body_from_db(message_b))
+        self.assertIn("queued-late-attachment.txt", self._message_attachment_names_from_db(message_b))
         self.assertFalse(self.env["eadu.partner.any"].sudo().search([
             ("partner_id", "=", eadu_contact_b.id),
             ("pending_calls", "!=", False),
         ]))
+
+    def test_concurrent_message_edits_resend_last_update_after_bilateral_partition(self):
+        """Queued isolated body edits replayed out of order resend the latest body."""
+        eadu_contact_b, channel_a, message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Concurrent Message Update Channel",
+            "Original concurrent body",
+        )
+        eadu_contact_a = self.partner_b._get_eadu_partner()
+        channel_b = self.env["discuss.channel"].sudo().browse(message_b.res_id)
+        EaduAny = self.env["eadu.partner.any"].sudo()
+        map_a = EaduAny.search([
+            ("partner_id", "=", eadu_contact_b.id),
+            ("res_model", "=", "mail.message"),
+            ("res_id", "=", message_a.id),
+        ], limit=1)
+        map_b = EaduAny.search([
+            ("partner_id", "=", eadu_contact_a.id),
+            ("res_model", "=", "mail.message"),
+            ("res_id", "=", message_b.id),
+        ], limit=1)
+        self.assertTrue(map_a.sync_version)
+        self.assertEqual(map_a.sync_version, map_b.sync_version)
+        base_seq = map_a.sync_version["seq"]
+
+        self._blocked_partners.update({eadu_contact_a.id, eadu_contact_b.id})
+        channel_a.with_user(self.user_a)._message_update_content(
+            message_a.with_user(self.user_a),
+            body="Edit from A first",
+            attachment_ids=[],
+        )
+        channel_a.with_user(self.user_a)._message_update_content(
+            message_a.with_user(self.user_a),
+            body="Edit from A latest",
+            attachment_ids=[],
+        )
+        channel_b.with_user(self.user_b)._message_update_content(
+            message_b.with_user(self.user_b),
+            body="Edit from B",
+            attachment_ids=[],
+        )
+
+        self.assertIn("Edit from A latest", self._message_body_from_db(message_a))
+        self.assertNotIn("Edit from B", self._message_body_from_db(message_a))
+        self.assertIn("Edit from B", self._message_body_from_db(message_b))
+        self.assertNotIn("Edit from A", self._message_body_from_db(message_b))
+
+        pending_a_to_b = EaduAny.search([
+            ("partner_id", "=", eadu_contact_b.id),
+            ("pending_calls", "!=", False),
+        ])
+        pending_b_to_a = EaduAny.search([
+            ("partner_id", "=", eadu_contact_a.id),
+            ("pending_calls", "!=", False),
+        ])
+        self.assertEqual(
+            sum(
+                1
+                for record in pending_a_to_b
+                for call in (record.pending_calls or [])
+                if call.get("model") == "mail.message" and call.get("method") == "action_eadu_update"
+            ),
+            2,
+            "A should have two queued message updates, simulating more edits while the server is down",
+        )
+        self.assertEqual(
+            sum(
+                1
+                for record in pending_b_to_a
+                for call in (record.pending_calls or [])
+                if call.get("model") == "mail.message" and call.get("method") == "action_eadu_update"
+            ),
+            1,
+        )
+
+        version_a = map_a.sync_version
+        version_b = map_b.sync_version
+        self.assertEqual(version_a["seq"], base_seq + 2)
+        self.assertEqual(version_b["seq"], base_seq + 1)
+        self.assertNotEqual(version_a["origin"], version_b["origin"])
+
+        self._blocked_partners.difference_update({eadu_contact_a.id, eadu_contact_b.id})
+        EaduAny._retry_queued_calls(eadu_contact_a)
+        resend_calls = self._pending_mail_message_update_calls_for_partner(eadu_contact_b)
+        self.assertTrue(
+            any(
+                call["params"].get("fields", {}).get("body")
+                and "Edit from A latest" in call["params"]["fields"]["body"]
+                for call in resend_calls
+            ),
+            "Replaying B's stale queued update first should queue a resend of A's latest body",
+        )
+        EaduAny._retry_queued_calls(eadu_contact_b)
+        self._retry_until_no_pending_for_partners(eadu_contact_a, eadu_contact_b)
+
+        self.assertIn("Edit from A latest", self._message_body_from_db(message_a))
+        self.assertIn("Edit from A latest", self._message_body_from_db(message_b))
+        self.assertNotIn("Edit from B", self._message_body_from_db(message_a))
+        self.assertNotIn("Edit from B", self._message_body_from_db(message_b))
+        self.assertFalse(self._pending_for_partners(eadu_contact_a, eadu_contact_b))
+
+    def test_concurrent_message_edits_merge_different_fields_after_bilateral_partition(self):
+        """Concurrent body and attachment-only edits should converge to both changes."""
+        eadu_contact_b, _channel_a, message_a, message_b = self._create_synced_ab_channel_message(
+            "EADU Concurrent Message Merge Channel",
+            "Original merge body",
+        )
+        eadu_contact_a = self.partner_b._get_eadu_partner()
+        merge_attachment = self.env["ir.attachment"].with_user(self.user_a).sudo().create({
+            "name": "concurrent-merge-attachment.txt",
+            "datas": base64.b64encode(b"concurrent merge attachment payload"),
+            "mimetype": "text/plain",
+            "res_model": "mail.compose.message",
+        })
+
+        self._blocked_partners.update({eadu_contact_a.id, eadu_contact_b.id})
+        message_a.with_user(self.user_a).write({"attachment_ids": [(4, merge_attachment.id)]})
+        message_b.with_user(self.user_b).write({"body": "Body edit from B"})
+        self.assertNotIn("Body edit from B", self._message_body_from_db(message_a))
+        self.assertNotIn("concurrent-merge-attachment.txt", self._message_attachment_names_from_db(message_b))
+        self.assertTrue(self._pending_for_partners(eadu_contact_a, eadu_contact_b))
+
+        self._blocked_partners.difference_update({eadu_contact_a.id, eadu_contact_b.id})
+        EaduAny = self.env["eadu.partner.any"].sudo()
+        EaduAny._retry_queued_calls(eadu_contact_a)
+        resend_calls = self._pending_mail_message_update_calls_for_partner(eadu_contact_b)
+        self.assertTrue(
+            any(
+                "Body edit from B" in (call["params"].get("fields", {}).get("body") or "")
+                and (
+                    "attachment_ids" in call["params"]
+                    or "attachment_ids" in (call.get("ident_placeholders") or {})
+                )
+                for call in resend_calls
+            ),
+            "Merging B's body onto A's attachment should queue a resend of the combined latest state",
+        )
+        EaduAny._retry_queued_calls(eadu_contact_b)
+        self._retry_until_no_pending_for_partners(eadu_contact_a, eadu_contact_b)
+
+        self.assertIn("Body edit from B", self._message_body_from_db(message_a))
+        self.assertIn("Body edit from B", self._message_body_from_db(message_b))
+        self.assertIn("concurrent-merge-attachment.txt", self._message_attachment_names_from_db(message_a))
+        self.assertIn("concurrent-merge-attachment.txt", self._message_attachment_names_from_db(message_b))
+        self.assertFalse(self._pending_for_partners(eadu_contact_a, eadu_contact_b))
 
     def test_exchange_token_flow_three_companies_discuss_triplication(self):
         """
@@ -954,6 +1147,10 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.company_a.partner_id.city = "Sync City"
         self.company_a.partner_id.image_1920 = TEST_IMAGE_1X1
         self.user_a.partner_id.image_1920 = TEST_IMAGE_1X1
+        self.company_b.partner_id.website = "https://db-b.example.test"
+        self.company_b.partner_id.street = "Return Exchange Street 2"
+        self.company_b.partner_id.city = "Return Sync City"
+        self.company_b.partner_id.image_1920 = TEST_IMAGE_1X1
 
         token = self.partner_a.with_user(self.user_a)._generate_eadu_exchange()
         decoded = self.env["res.partner"]._decode_eadu_exchange_token(token)
@@ -977,6 +1174,10 @@ class TestEaduExchangeMultiCompany(common.TransactionCase):
         self.assertEqual(self.partner_b.city, self.company_a.partner_id.city)
         self.assertTrue(alice_contact_b)
         self.assertTrue(alice_contact_b.image_1920)
+        self.assertTrue(self.partner_a.image_1920)
+        self.assertEqual(self.partner_a.website, self.company_b.partner_id.website)
+        self.assertEqual(self.partner_a.street, self.company_b.partner_id.street)
+        self.assertEqual(self.partner_a.city, self.company_b.partner_id.city)
 
     def test_exchange_requires_settings_access(self):
         regular_user = self.ResUsers.create({

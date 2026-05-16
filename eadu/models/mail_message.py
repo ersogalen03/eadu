@@ -1,10 +1,11 @@
 # Part of Eadu. See LICENSE file for full copyright and licensing details.
 
-from markupsafe import Markup
-from odoo import api, fields, models
-from odoo.exceptions import AccessError
-
+from datetime import datetime
 import re
+
+from markupsafe import Markup
+from odoo import api, models
+from odoo.exceptions import AccessError
 
 class MailMessage(models.Model):
     _inherit = "mail.message"
@@ -108,10 +109,53 @@ class MailMessage(models.Model):
     def _eadu_update_field_names(self):
         return ['body', 'attachment_ids']
 
-    def _eadu_send_update(self, eadu_any, field_names=None):
+    def _eadu_sync_origin(self):
+        db_name = self.env['res.partner']._get_db_name()
+        base_url = self.env['ir.config_parameter'].sudo().get_param('web.base.url')
+        return f"{base_url}#{db_name}#mail.message#{self.id}"
+
+    def _eadu_sync_timestamp(self):
+        return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+    def _eadu_next_sync_version(self, current_version=None, field_names=None):
+        self.ensure_one()
+        current_version = current_version or {}
+        current_seq = int(current_version.get('seq') or 0)
+        return {
+            'fields': sorted(field_names or self._eadu_update_field_names()),
+            'seq': current_seq + 1,
+            'origin': self._eadu_sync_origin(),
+            'ts': self._eadu_sync_timestamp(),
+        }
+
+    def _eadu_version_sort_key(self, version):
+        version = version or {}
+        return (
+            version.get('seq') or 0,
+            version.get('origin') or '',
+            version.get('ts') or '',
+        )
+
+    def _eadu_incoming_version_is_newer(self, incoming_version, current_version):
+        return self._eadu_version_sort_key(incoming_version) > self._eadu_version_sort_key(current_version)
+
+    def _eadu_latest_sync_version(self, *versions):
+        return max(
+            (version for version in versions if version),
+            key=self._eadu_version_sort_key,
+            default=False,
+        )
+
+    def _eadu_version_field_names(self, version):
+        field_names = set((version or {}).get('fields') or [])
+        return field_names or set(self._eadu_update_field_names())
+
+    def _eadu_send_update(self, eadu_any, field_names=None, sync_version=None):
         self.ensure_one()
         EaduAny = self.env['eadu.partner.any'].sudo()
         field_names = set(field_names or self._eadu_update_field_names())
+        base_version = eadu_any.sync_version
+        sync_version = sync_version or self._eadu_next_sync_version(base_version, field_names)
         fields_values = {}
         if 'body' in field_names:
             fields_values['body'] = self._rewrite_oe_links(
@@ -121,6 +165,8 @@ class MailMessage(models.Model):
         params = {
             'eadu_ident': eadu_any.res_id,
             'fields': fields_values,
+            'base_version': base_version,
+            'sync_version': sync_version,
         }
         ident_placeholders = {}
         if 'attachment_ids' in field_names:
@@ -142,6 +188,7 @@ class MailMessage(models.Model):
             eadu_any_ref=eadu_any,
             ident_placeholders=ident_placeholders,
         )
+        eadu_any.sync_version = sync_version
 
     def _handle_eadu_msg(self, model, res_id, body):
         if model == 'discuss.channel':
@@ -305,24 +352,28 @@ class MailMessage(models.Model):
                         else:
                             payload['attachment_ids'] = remote_att_ids
 
+                        sync_version = created_record._eadu_next_sync_version()
+
                         # ── Send / queue the message itself ──────────────────
-                        EaduAny._send_or_queue(
+                        message_any = EaduAny._send_or_queue(
                             eadu_partner,
                             'mail.message',
                             'action_eadu_receive',
-                            payload,
+                            dict(payload, sync_version=sync_version),
                             local_model='mail.message',
                             local_res_id=created_record.id,
                             result_key='message_id',
                             partner_master=False,
                             ident_placeholders=item_placeholders,
                         )
+                        if message_any:
+                            message_any.sync_version = sync_version
 
             recs += created_record
         return recs
                     
 
-    def action_eadu_receive(self, model, res_id, body, partner_id, eadu_ident, attachment_ids=None):
+    def action_eadu_receive(self, model, res_id, body, partner_id, eadu_ident, attachment_ids=None, sync_version=None):
         eadu_contact = self.env.user.partner_id
         if not eadu_contact.eadu_url:
             raise
@@ -364,7 +415,12 @@ class MailMessage(models.Model):
             ])
             if already_linked.filtered(lambda a: a.master_status == 'me'):
                 partner_master = False
-        self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(eadu_contact, 'mail.message', message.id, eadu_ident, partner_master=partner_master)
+        message_any = self.env['eadu.partner.any'].sudo()._search_create_for_eadu_partner(
+            eadu_contact, 'mail.message', message.id, eadu_ident,
+            partner_master=partner_master,
+        )
+        if sync_version:
+            message_any.sync_version = sync_version
         if not partner_master:
             # I am the master and need to relay to other EADU endpoints in the channel.
             EaduAny = self.env['eadu.partner.any'].sudo()
@@ -433,7 +489,7 @@ class MailMessage(models.Model):
                 if has_queued_att:
                     relay_placeholders['attachment_ids'] = att_any_ids
 
-                EaduAny._send_or_queue(
+                relay_any = EaduAny._send_or_queue(
                     eadu_partner_upd,
                     'mail.message',
                     'action_eadu_receive',
@@ -444,6 +500,7 @@ class MailMessage(models.Model):
                         'partner_id': partner_map.eadu_ident or None,
                         'eadu_ident': message.id,
                         'attachment_ids': [] if has_queued_att else remote_att_ids,
+                        'sync_version': sync_version,
                     },
                     local_model='mail.message',
                     local_res_id=message.id,
@@ -451,12 +508,14 @@ class MailMessage(models.Model):
                     partner_master=False,
                     ident_placeholders=relay_placeholders,
                 )
+                if relay_any and sync_version:
+                    relay_any.sync_version = sync_version
 
 
 
         return {'message_id': message.id}
 
-    def action_eadu_update(self, eadu_ident, fields=None, attachment_ids=None):
+    def action_eadu_update(self, eadu_ident, fields=None, attachment_ids=None, base_version=None, sync_version=None):
         eadu_contact = self.env.user.partner_id
         if not eadu_contact.eadu_url:
             raise
@@ -468,8 +527,22 @@ class MailMessage(models.Model):
             return {'result': False}
 
         message = eadu_any._get_record().sudo()
-        vals = {}
+        current_version = eadu_any.sync_version
         fields = fields or {}
+        incoming_field_names = set(fields)
+        if attachment_ids is not None:
+            incoming_field_names.add('attachment_ids')
+        has_conflict = current_version and base_version and current_version != base_version
+        merge_non_overlapping = False
+        if has_conflict:
+            local_field_names = self._eadu_version_field_names(current_version)
+            has_field_overlap = bool(incoming_field_names & local_field_names) or not incoming_field_names
+            if not self._eadu_incoming_version_is_newer(sync_version, current_version) and has_field_overlap:
+                message._eadu_send_update(eadu_any, sync_version=current_version)
+                return {'result': False, 'conflict': True}
+            merge_non_overlapping = not has_field_overlap
+
+        vals = {}
         if 'body' in fields:
             vals['body'] = Markup(fields['body'])
         if attachment_ids is not None:
@@ -482,6 +555,11 @@ class MailMessage(models.Model):
 
         if vals:
             message.with_context(eadu_message=True).write(vals)
+        if sync_version:
+            eadu_any.sync_version = sync_version
+        if merge_non_overlapping:
+            eadu_any.sync_version = self._eadu_latest_sync_version(current_version, sync_version)
+            message._eadu_send_update(eadu_any)
 
         if message.model == 'discuss.channel' and eadu_any.master_status == 'me':
             relay_anys = self.env['eadu.partner.any'].sudo().search([
@@ -492,7 +570,7 @@ class MailMessage(models.Model):
             for relay_any in relay_anys:
                 message._eadu_send_update(relay_any)
 
-        return {'result': True}
+        return {'result': True, 'conflict': bool(has_conflict), 'merged': merge_non_overlapping}
 
     def write(self, vals):
         res = super().write(vals)

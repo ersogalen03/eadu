@@ -241,6 +241,8 @@ class ResPartner(models.Model):
             remote_partner_id,
         )
         cuser = connecting_user or self.env.user
+        company_partner = self._eadu_exchange_company_partner(cuser)
+        company_partner_fields = company_partner._eadu_prepare_update_fields() if company_partner else {}
         res = eadu_contact._eadu_call('res.partner', 'action_connect_eadu', {
             'apikey': apikey,
             'url': self.env['ir.config_parameter'].sudo().get_param('web.base.url'),
@@ -250,6 +252,11 @@ class ResPartner(models.Model):
             'ypartnereadu': connecting_contact.id, # newly created partner in this db
             'ypartnerid': remote_partner_id, # for the contacted db to verify who started it originally
             'ycompanyeadu': self.commercial_partner_id.id,
+            'fields': {
+                'partner': company_partner_fields,
+                'company_partner': company_partner_fields,
+                'user_partner': cuser.partner_id._eadu_prepare_update_fields(),
+            },
         })
         ypartnerid = res['result']
         if ypartnerid:
@@ -335,6 +342,14 @@ class ResPartner(models.Model):
                 eadu_contact, 'res.partner', eadu_contact.commercial_partner_id.id,
                 int(ycompanyeadu),
             )
+        company_vals = self._eadu_update_values_from_fields(
+            self._eadu_merge_field_values(
+                fields.get('partner') or company_fields,
+                fields.get('company_partner'),
+            )
+        )
+        if company_vals:
+            eadu_contact.commercial_partner_id.with_context(eadu_message=True).write(company_vals)
         company_partner = self._eadu_exchange_company_partner(user)
         company_partner_fields = company_partner._eadu_prepare_update_fields() if company_partner else {}
         return {
