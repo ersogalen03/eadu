@@ -94,5 +94,30 @@
             <field name="company_id" ref="base.main_company"/>
             <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('base.group_partner_manager'), ref('base.group_allow_export')])]"/>
         </record>
+
+        <record id="product_demo_textile_stock" model="product.product">
+            <field name="name">Ghorman Textile Stock Ledger</field>
+            <field name="is_storable" eval="True"/>
+        </record>
+        <record id="move_demo_textile_incoming" model="stock.move">
+            <field name="description_picking_manual">EADU demo textile replenishment</field>
+            <field name="product_id" ref="product_demo_textile_stock"/>
+            <field name="product_uom_qty">250.0</field>
+            <field name="product_uom" ref="uom.product_uom_unit"/>
+            <field name="location_id" ref="stock.stock_location_suppliers"/>
+            <field name="location_dest_id" ref="stock.stock_location_stock"/>
+            <field name="date">2026-08-07 09:00:00</field>
+            <field name="state">confirmed</field>
+        </record>
+        <record id="move_demo_textile_outgoing" model="stock.move">
+            <field name="description_picking_manual">EADU demo textile allocation</field>
+            <field name="product_id" ref="product_demo_textile_stock"/>
+            <field name="product_uom_qty">90.0</field>
+            <field name="product_uom" ref="uom.product_uom_unit"/>
+            <field name="location_id" ref="stock.stock_location_stock"/>
+            <field name="location_dest_id" ref="stock.stock_location_customers"/>
+            <field name="date">2026-08-24 09:00:00</field>
+            <field name="state">confirmed</field>
+        </record>
     </data>
 </odoo>

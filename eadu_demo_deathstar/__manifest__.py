@@ -14,7 +14,7 @@ Krennic as administrator, station users, and engineered component products.
     'category': 'Eadu/Demo',
     'version': '0.1',
     'depends': [
-        'eadu_product',
+        'eadu_stock',
     ],
     'data': [
         'data/planet_data.xml',

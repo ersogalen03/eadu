@@ -14,7 +14,7 @@ rich textile products with attributes and variants for EADU product scenarios.
     'category': 'Eadu/Demo',
     'version': '0.1',
     'depends': [
-        'eadu_product',
+        'eadu_stock',
     ],
     'data': [
         'data/planet_data.xml',

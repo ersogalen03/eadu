@@ -14,7 +14,7 @@ administrator, refinery users, and kyber refinement products with variants.
     'category': 'Eadu/Demo',
     'version': '0.1',
     'depends': [
-        'eadu_product',
+        'eadu_stock',
     ],
     'data': [
         'data/planet_data.xml',
