@@ -13,6 +13,40 @@ To run the 2 instances, you can do: (if eadu is placed next to the odoo repo)
 ./odoo-bin --addons="../eadu,addons" -d jedha -i eadu -p 8070
 
 
+Three-instance demo environment
+-------------------------------
+
+When this repository is placed next to the Odoo repository, the helper scripts
+can create and connect all three EADU demo instances:
+
+```
+./eadu_install.sh eadutest
+```
+
+The prefix is used to create the following databases and start them on local
+ports:
+
+- ``eadutest_eadu`` at http://127.0.0.1:8069
+- ``eadutest_ghorman`` at http://127.0.0.1:8070
+- ``eadutest_deathstar`` at http://127.0.0.1:8071
+
+``eadu_install.sh`` installs the corresponding demo module in each database,
+starts the three servers, configures their local URLs, and creates pairwise EADU
+connections. Each database is therefore connected to both of the other demo
+databases. The script requires local PostgreSQL access through ``psql`` and
+does not overwrite existing databases; use a new prefix for a fresh setup.
+
+To start an already installed set of databases again, run:
+
+```
+./eadu_run.sh eadutest
+```
+
+Both scripts expect Odoo to be in ``../odoo``. Set ``ODOO_DIR`` to the Odoo
+checkout path when it is elsewhere. Installation logs, runtime logs, and PID
+files are stored in ``.eadu_instances/<prefix>/``.
+
+
 Goal
 ----
 
