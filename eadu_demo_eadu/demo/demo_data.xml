@@ -22,5 +22,77 @@
             <field name="image_1920" type="base64" file="eadu_demo_eadu/static/img/demo_lyra_clerk.png"/>
             <field name="signature" type="html"><div>Lyra Station Clerk, refinery inventory desk</div></field>
         </record>
+        <record id="partner_demo_jyn" model="res.partner">
+            <field name="name">Jyn Erso</field>
+            <field name="email">jyn.erso@eadu.example</field>
+        </record>
+        <record id="user_demo_jyn" model="res.users">
+            <field name="partner_id" ref="partner_demo_jyn"/>
+            <field name="login">demo1</field>
+            <field name="password">demo1</field>
+            <field name="signature" type="html"><div>Jyn Erso</div></field>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('base.group_partner_manager'), ref('base.group_allow_export')])]"/>
+        </record>
+        <record id="partner_demo_cassian" model="res.partner">
+            <field name="name">Cassian Andor</field>
+            <field name="email">cassian.andor@eadu.example</field>
+        </record>
+        <record id="user_demo_cassian" model="res.users">
+            <field name="partner_id" ref="partner_demo_cassian"/>
+            <field name="login">demo2</field>
+            <field name="password">demo2</field>
+            <field name="signature" type="html"><div>Cassian Andor</div></field>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('base.group_partner_manager'), ref('base.group_allow_export')])]"/>
+        </record>
+        <record id="partner_demo_k2so" model="res.partner">
+            <field name="name">K-2SO</field>
+            <field name="email">k2so@eadu.example</field>
+        </record>
+        <record id="user_demo_k2so" model="res.users">
+            <field name="partner_id" ref="partner_demo_k2so"/>
+            <field name="login">demo3</field>
+            <field name="password">demo3</field>
+            <field name="signature" type="html"><div>K-2SO</div></field>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('base.group_partner_manager'), ref('base.group_allow_export')])]"/>
+        </record>
+        <record id="partner_demo_chirrut" model="res.partner">
+            <field name="name">Chirrut Imwe</field>
+            <field name="email">chirrut.imwe@eadu.example</field>
+        </record>
+        <record id="user_demo_chirrut" model="res.users">
+            <field name="partner_id" ref="partner_demo_chirrut"/>
+            <field name="login">demo4</field>
+            <field name="password">demo4</field>
+            <field name="signature" type="html"><div>Chirrut Imwe</div></field>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('base.group_partner_manager'), ref('base.group_allow_export')])]"/>
+        </record>
+        <record id="partner_demo_baze" model="res.partner">
+            <field name="name">Baze Malbus</field>
+            <field name="email">baze.malbus@eadu.example</field>
+        </record>
+        <record id="user_demo_baze" model="res.users">
+            <field name="partner_id" ref="partner_demo_baze"/>
+            <field name="login">demo5</field>
+            <field name="password">demo5</field>
+            <field name="signature" type="html"><div>Baze Malbus</div></field>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('base.group_partner_manager'), ref('base.group_allow_export')])]"/>
+        </record>
+        <record id="partner_demo_bodhi" model="res.partner">
+            <field name="name">Bodhi Rook</field>
+            <field name="email">bodhi.rook@eadu.example</field>
+        </record>
+        <record id="user_demo_bodhi" model="res.users">
+            <field name="partner_id" ref="partner_demo_bodhi"/>
+            <field name="login">demo6</field>
+            <field name="password">demo6</field>
+            <field name="signature" type="html"><div>Bodhi Rook</div></field>
+            <field name="company_id" ref="base.main_company"/>
+            <field name="group_ids" eval="[Command.set([ref('base.group_user'), ref('base.group_partner_manager'), ref('base.group_allow_export')])]"/>
+        </record>
     </data>
 </odoo>
